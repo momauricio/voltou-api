@@ -1,0 +1,12 @@
+﻿---
+description: Isolamento multi-tenant (tenant_id / store_id)
+globs: "apps/api/**/*.ts"
+alwaysApply: false
+---
+
+# Multi-tenant
+
+- Todo acesso a dados deve filtrar por `tenantId` do JWT/sessão; `storeId` quando o recurso for por loja.
+- Proíba IDs de outro tenant mesmo que o UUID seja adivinhado (404/403 uniforme).
+- Índices Prisma sempre incluem `tenantId` (e `storeId` quando relevante).
+- Testes de regressão para vazamento cross-tenant em listagens e updates.

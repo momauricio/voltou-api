@@ -1,0 +1,13 @@
+﻿---
+description: LGPD e proteção de dados pessoais no Voltou
+globs: "**/*.{ts,tsx,prisma}"
+alwaysApply: false
+---
+
+# Segurança & LGPD
+
+- Trate telefone, e-mail e nome de clientes como **PII**: hash para busca, criptografia para exibição; nunca logar valores em claro.
+- Credenciais WhatsApp/BSP ficam criptografadas (`credentialsEnc`); use KMS/vault em produção.
+- Minimize retenção: apague ou anonimize dados quando não houver base legal.
+- Exportação/portabilidade e exclusão devem ser suportadas por tenant.
+- Documente bases legais e consentimento para campanhas (WhatsApp marketing).

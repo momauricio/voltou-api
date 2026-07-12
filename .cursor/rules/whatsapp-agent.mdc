@@ -1,0 +1,12 @@
+﻿---
+description: WhatsApp BSP adapter e módulo agent
+globs: "apps/api/src/{whatsapp,agent}/**/*"
+alwaysApply: false
+---
+
+# WhatsApp & agente
+
+- Domínio depende de `WhatsAppProvider`, não de SDK específico.
+- Implementações BSP ficam em `whatsapp/`; stub em dev, produção via DI (`WHATSAPP_PROVIDER`).
+- Webhooks: validar assinatura, idempotência por `messageId`, fila para envio.
+- Módulo `agent` usa `StoreKnowledge` + políticas LGPD; não inventar preços/estoque — consultar API.

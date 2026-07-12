@@ -1,0 +1,190 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Tenant {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  stores              Store[]
+  users               User[]
+  products            Product[]
+  customers           Customer[]
+  sales               Sale[]
+  campaigns           Campaign[]
+  outreachMessages    OutreachMessage[]
+  storeKnowledge      StoreKnowledge[]
+  whatsappConnections WhatsAppConnection[]
+}
+
+model Store {
+  id        String   @id @default(uuid())
+  tenantId  String
+  name      String
+  slug      String
+  timezone  String   @default("America/Sao_Paulo")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant              Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  products            Product[]
+  customers           Customer[]
+  sales               Sale[]
+  campaigns           Campaign[]
+  outreachMessages    OutreachMessage[]
+  storeKnowledge      StoreKnowledge[]
+  whatsappConnections WhatsAppConnection[]
+
+  @@unique([tenantId, slug])
+  @@index([tenantId])
+}
+
+model User {
+  id           String   @id @default(uuid())
+  tenantId     String
+  email        String
+  passwordHash String
+  role         String   @default("owner")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+}
+
+model Product {
+  id          String   @id @default(uuid())
+  tenantId    String
+  storeId     String
+  name        String
+  sku         String?
+  priceCents  Int
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  store  Store  @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  sales  Sale[]
+
+  @@index([tenantId, storeId])
+}
+
+model Customer {
+  id          String   @id @default(uuid())
+  tenantId    String
+  storeId     String
+  displayName String
+  /// PII: store phone as HMAC/hash + encrypted blob at application layer
+  phoneHash   String
+  /// PII: encrypted E.164 — decrypt only in trusted services
+  phoneEnc    String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  store            Store             @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  sales            Sale[]
+  outreachMessages OutreachMessage[]
+
+  @@index([tenantId, storeId])
+  @@index([phoneHash])
+}
+
+model Sale {
+  id          String   @id @default(uuid())
+  tenantId    String
+  storeId     String
+  customerId  String
+  productId   String
+  amountCents Int
+  currency    String   @default("BRL")
+  soldAt      DateTime @default(now())
+  createdAt   DateTime @default(now())
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  store    Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  product  Product  @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, storeId, soldAt])
+}
+
+model Campaign {
+  id        String   @id @default(uuid())
+  tenantId  String
+  storeId   String
+  name      String
+  status    String   @default("draft")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  store            Store             @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  outreachMessages OutreachMessage[]
+
+  @@index([tenantId, storeId])
+}
+
+model OutreachMessage {
+  id         String   @id @default(uuid())
+  tenantId   String
+  storeId    String
+  campaignId String
+  customerId String
+  channel    String   @default("whatsapp")
+  body       String
+  status     String   @default("queued")
+  sentAt     DateTime?
+  createdAt  DateTime @default(now())
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  store    Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, storeId, status])
+}
+
+model StoreKnowledge {
+  id        String   @id @default(uuid())
+  tenantId  String
+  storeId   String
+  title     String
+  content   String
+  chunkIndex Int     @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  store  Store  @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, storeId])
+}
+
+model WhatsAppConnection {
+  id        String   @id @default(uuid())
+  tenantId  String
+  storeId   String
+  bspName   String
+  /// Encrypted BSP credentials (tokens, WABA ids) — use KMS in production
+  credentialsEnc String
+  phoneNumberId  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  store  Store  @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, storeId])
+}
