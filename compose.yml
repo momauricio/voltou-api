@@ -1,0 +1,16 @@
+services:
+  voltou-api:
+    container_name: voltou-api
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "3010:3010"
+    volumes:
+      - voltou_api_data:/app/data
+
+volumes:
+  voltou_api_data:

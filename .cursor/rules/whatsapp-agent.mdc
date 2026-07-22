@@ -7,6 +7,7 @@ alwaysApply: false
 # WhatsApp & agente
 
 - Domínio depende de `WhatsAppProvider`, não de SDK específico.
-- Implementações BSP ficam em `whatsapp/`; stub em dev, produção via DI (`WHATSAPP_PROVIDER`).
-- Webhooks: validar assinatura, idempotência por `messageId`, fila para envio.
+- Implementações ficam em `whatsapp/` — stub em dev sem `WAHA_BASE_URL`; produção/local com WAHA via DI (`WHATSAPP_PROVIDER`).
+- Sessões: criar via API, autenticar com QR (`GET .../auth/qr`), status `WORKING` antes de enviar.
+- Webhooks: validar assinatura, idempotência por `messageId`, fila para envio (próximo passo).
 - Módulo `agent` usa `StoreKnowledge` + políticas LGPD; não inventar preços/estoque — consultar API.

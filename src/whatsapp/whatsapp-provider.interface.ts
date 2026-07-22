@@ -6,7 +6,12 @@
   templateId?: string;
 }
 
+export type SendMessageResult = {
+  messageId: string;
+  chatId?: string;
+};
+
 export interface WhatsAppProvider {
-  sendMessage(params: SendMessageParams): Promise<{ messageId: string }>;
+  sendMessage(params: SendMessageParams): Promise<SendMessageResult>;
   verifyWebhook(payload: unknown, signature: string): boolean;
 }

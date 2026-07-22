@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
   url      = env("DATABASE_URL")
 }
 
@@ -11,6 +11,10 @@ model Tenant {
   id        String   @id @default(uuid())
   name      String
   slug      String   @unique
+  /// CNPJ digits only (14). Must be valid + active at registration.
+  cnpj      String   @unique
+  /// Commission Voltou takes on paid checkouts (basis points). 500 = 5%.
+  commissionRateBps Int @default(500)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -23,6 +27,12 @@ model Tenant {
   outreachMessages    OutreachMessage[]
   storeKnowledge      StoreKnowledge[]
   whatsappConnections WhatsAppConnection[]
+  customerInterests   CustomerInterest[]
+  checkouts           Checkout[]
+  customerEvents      CustomerEvent[]
+  importJobs          ImportJob[]
+  blingConnections    BlingConnection[]
+  mercadoPagoConnections MercadoPagoConnection[]
 }
 
 model Store {
@@ -31,6 +41,14 @@ model Store {
   name      String
   slug      String
   timezone  String   @default("America/Sao_Paulo")
+  /// mercadopago | infinitepay (futuro) | stub
+  preferredCheckoutProvider String @default("mercadopago")
+  checkoutLogoUrl          String?
+  checkoutPrimaryColor     String?
+  checkoutSecondaryColor   String?
+  /// geist | dm-sans | space-grotesk | nunito | playfair | source-serif
+  checkoutFontFamily       String?
+  checkoutMessage          String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -42,24 +60,36 @@ model Store {
   outreachMessages    OutreachMessage[]
   storeKnowledge      StoreKnowledge[]
   whatsappConnections WhatsAppConnection[]
+  customerInterests   CustomerInterest[]
+  checkouts           Checkout[]
+  customerEvents      CustomerEvent[]
+  importJobs          ImportJob[]
+  blingConnections    BlingConnection[]
+  mercadoPagoConnections MercadoPagoConnection[]
 
   @@unique([tenantId, slug])
   @@index([tenantId])
 }
 
 model User {
-  id           String   @id @default(uuid())
-  tenantId     String
-  email        String
-  passwordHash String
-  role         String   @default("owner")
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id                   String    @id @default(uuid())
+  tenantId             String
+  ownerName            String
+  email                String    @unique
+  passwordHash         String
+  role                 String    @default("owner")
+  emailVerifiedAt      DateTime?
+  emailVerifyToken     String?
+  passwordResetToken   String?
+  passwordResetExpires DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  @@unique([tenantId, email])
   @@index([tenantId])
+  @@index([emailVerifyToken])
+  @@index([passwordResetToken])
 }
 
 model Product {
@@ -68,16 +98,32 @@ model Product {
   storeId     String
   name        String
   sku         String?
+  /// ID do produto no Bling (quando sincronizado)
+  blingProductId String?
+  category    String?
   priceCents  Int
+  /// Custo do produto (opcional) — usado no piso de preço da IA
+  costCents   Int?
+  /// Desconto máximo permitido pelo lojista (basis points; 1000 = 10%)
+  maxDiscountBps Int?
+  /// available | unavailable — estoque numérico continua opcional
+  availability String  @default("available")
+  /// A IA pode oferecer este produto?
+  sellableByAi Boolean @default(true)
+  stock       Int      @default(0)
   active      Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  store  Store  @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  sales  Sale[]
+  tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  store             Store              @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  sales             Sale[]
+  customerInterests CustomerInterest[]
+  checkouts         Checkout[]
 
   @@index([tenantId, storeId])
+  @@index([tenantId, storeId, blingProductId])
+  @@index([tenantId, storeId, sku])
 }
 
 model Customer {
@@ -89,35 +135,174 @@ model Customer {
   phoneHash   String
   /// PII: encrypted E.164 — decrypt only in trusted services
   phoneEnc    String?
+  /// Masked display only (never full plaintext in UI logs)
+  phoneMasked String?
+  notes       String?
+  /// LGPD: cliente pediu para não receber mensagens (respeitado em qualquer disparo)
+  optedOutAt  DateTime?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  store            Store             @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  sales            Sale[]
-  outreachMessages OutreachMessage[]
+  tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  store             Store              @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  sales             Sale[]
+  outreachMessages  OutreachMessage[]
+  customerInterests CustomerInterest[]
+  checkouts         Checkout[]
+  customerEvents    CustomerEvent[]
 
   @@index([tenantId, storeId])
   @@index([phoneHash])
 }
 
+/// What the end-customer showed interest in — critical for recovery & AI upsell.
+model CustomerInterest {
+  id                  String   @id @default(uuid())
+  tenantId            String
+  storeId             String
+  customerId          String
+  productId           String?
+  /// Snapshot so history survives product edits/deletes
+  productNameSnapshot String
+  productPriceCents   Int?
+  source              String   @default("walk_in") // walk_in | whatsapp | import | ai | web
+  status              String   @default("open") // open | converted | discarded
+  notes               String?
+  interestedAt        DateTime @default(now())
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  store    Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  product  Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, storeId, customerId])
+  @@index([tenantId, status])
+  @@index([productId])
+}
+
 model Sale {
-  id          String   @id @default(uuid())
-  tenantId    String
-  storeId     String
-  customerId  String
-  productId   String
-  amountCents Int
-  currency    String   @default("BRL")
-  soldAt      DateTime @default(now())
-  createdAt   DateTime @default(now())
+  id              String   @id @default(uuid())
+  tenantId        String
+  storeId         String
+  customerId      String
+  productId       String
+  amountCents     Int
+  currency        String   @default("BRL")
+  /// in_store | checkout_link | ai | import
+  source          String   @default("in_store")
+  status          String   @default("completed") // completed | pending | refunded
+  checkoutId      String?
+  /// Voltou commission in cents (0 for pure in-store unless configured otherwise)
+  commissionCents Int      @default(0)
+  commissionRateBps Int    @default(0)
+  /// Mercado Pago payment id (audit)
+  mpPaymentId     String?
+  soldAt          DateTime @default(now())
+  createdAt       DateTime @default(now())
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  store    Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  customer Customer  @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  product  Product   @relation(fields: [productId], references: [id], onDelete: Restrict)
+  checkout Checkout? @relation(fields: [checkoutId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, storeId, soldAt])
+  @@index([customerId])
+  @@index([mpPaymentId])
+  @@index([checkoutId])
+}
+
+/// Payment link the AI (or lojista) sends to the end-customer.
+model Checkout {
+  id                String    @id @default(uuid())
+  tenantId          String
+  storeId           String
+  customerId        String
+  productId         String?
+  productNameSnapshot String
+  amountCents       Int
+  currency          String    @default("BRL")
+  status            String    @default("pending") // pending | paid | expired | cancelled
+  /// Public URL sent on WhatsApp (/loja/{slug}/{coupon})
+  paymentUrl        String
+  /// Provider: stub | mercadopago | infinitepay
+  provider          String    @default("stub")
+  /// Public token (also used as legacy /p/{token} alias)
+  externalId        String?
+  /// Friendly coupon code (UPPERCASE), unique per store
+  couponCode        String?
+  /// Original list price before discount ("De R$")
+  listPriceCents    Int?
+  /// Store discount in basis points (1000 = 10%)
+  discountBps       Int       @default(0)
+  clickedAt         DateTime?
+  clickCount        Int       @default(0)
+  outreachMessageId String?
+  /// Mercado Pago payment id once paid
+  mpPaymentId       String?
+  /// Provider preference/payment id (ex.: MP preference id)
+  providerRef       String?
+  /// Redirect URL for the actual PSP checkout (init_point)
+  providerInitPoint String?
+  commissionRateBps Int
+  commissionCents   Int       @default(0)
+  interestId        String?
+  createdBy         String    @default("human") // human | ai
+  paidAt            DateTime?
+  expiresAt         DateTime?
+  /// Quando o lembrete de checkout pendente foi gerado (evita duplicar)
+  reminderAt        DateTime?
+  addonsJson        String?
+  paidLinesJson     String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   store    Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
   customer Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  product  Product  @relation(fields: [productId], references: [id], onDelete: Restrict)
+  product  Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  sales    Sale[]
 
-  @@index([tenantId, storeId, soldAt])
+  @@unique([storeId, couponCode])
+  @@index([tenantId, storeId, status])
+  @@index([customerId])
+  @@index([externalId])
+  @@index([providerRef])
+  @@index([couponCode])
+}
+
+/// Raw PSP webhook payloads for audit / replay.
+model WebhookLog {
+  id          String   @id @default(uuid())
+  provider    String   // mercadopago
+  payload     String   // JSON
+  headers     String?  // JSON
+  receivedAt  DateTime @default(now())
+  processedOk Boolean  @default(false)
+  error       String?
+}
+
+/// Timeline feed for the customer profile (purchases, interests, outreach, checkouts).
+model CustomerEvent {
+  id         String   @id @default(uuid())
+  tenantId   String
+  storeId    String
+  customerId String
+  /// sale | interest | outreach | checkout_sent | checkout_paid | reply | note
+  type       String
+  title      String
+  detail     String?
+  metadata   String? // JSON string
+  occurredAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  store    Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, customerId, occurredAt])
 }
 
 model Campaign {
@@ -125,7 +310,15 @@ model Campaign {
   tenantId  String
   storeId   String
   name      String
+  /// draft | awaiting_approval | active | done | system
   status    String   @default("draft")
+  /// Segmento alvo: inativos_60d | interesse_aberto | checkout_pendente | sem_compra | todos
+  segment   String?
+  /// Template com {{nome}} e {{produto}}
+  messageTemplate String?
+  /// system = criada automaticamente (ex.: lembrete de checkout)
+  kind      String   @default("manual")
+  scheduledAt DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -137,16 +330,25 @@ model Campaign {
 }
 
 model OutreachMessage {
-  id         String   @id @default(uuid())
+  id         String    @id @default(uuid())
   tenantId   String
   storeId    String
   campaignId String
   customerId String
-  channel    String   @default("whatsapp")
+  channel    String    @default("whatsapp")
   body       String
-  status     String   @default("queued")
+  /// pending_approval | approved | rejected | sent | failed
+  status     String    @default("pending_approval")
+  failReason String?
+  /// chatId WAHA usado no envio (@c.us ou @lid) — para casar respostas
+  externalChatId String?
+  /// ID da mensagem no provedor (WAHA)
+  providerMessageId String?
+  approvedAt DateTime?
   sentAt     DateTime?
-  createdAt  DateTime @default(now())
+  repliedAt  DateTime?
+  replyPreview String?
+  createdAt  DateTime  @default(now())
 
   tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   store    Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
@@ -154,17 +356,18 @@ model OutreachMessage {
   customer Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
 
   @@index([tenantId, storeId, status])
+  @@index([externalChatId])
 }
 
 model StoreKnowledge {
-  id        String   @id @default(uuid())
-  tenantId  String
-  storeId   String
-  title     String
-  content   String
-  chunkIndex Int     @default(0)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id         String   @id @default(uuid())
+  tenantId   String
+  storeId    String
+  title      String
+  content    String
+  chunkIndex Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   store  Store  @relation(fields: [storeId], references: [id], onDelete: Cascade)
@@ -172,19 +375,98 @@ model StoreKnowledge {
   @@index([tenantId, storeId])
 }
 
+/// Importação "jogue aqui": planilha/XML NF-e vira prévia estruturada, depois commit.
+model ImportJob {
+  id             String    @id @default(uuid())
+  tenantId       String
+  storeId        String
+  /// csv | nfe_xml | text | mixed
+  sourceType     String
+  /// preview | committed | failed
+  status         String    @default("preview")
+  fileName       String?
+  /// JSON ImportPreview (customers/products/sales/warnings)
+  payload        String
+  customersCount Int       @default(0)
+  productsCount  Int       @default(0)
+  salesCount     Int       @default(0)
+  /// JSON string[] de erros
+  errors         String?
+  committedAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  store  Store  @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, storeId, createdAt])
+}
+
 model WhatsAppConnection {
-  id        String   @id @default(uuid())
-  tenantId  String
-  storeId   String
-  bspName   String
-  /// Encrypted BSP credentials (tokens, WABA ids) — use KMS in production
-  credentialsEnc String
-  phoneNumberId  String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id           String   @id @default(uuid())
+  tenantId     String
+  storeId      String
+  /// Apelido exibido no painel
+  label        String
+  /// Nome da sessão no WAHA (id técnico)
+  sessionName  String
+  provider     String   @default("waha")
+  /// STOPPED | STARTING | SCAN_QR_CODE | WORKING | FAILED
+  status       String   @default("STARTING")
+  phoneE164    String?
+  /// Metadata JSON (legado BSP / extras)
+  metadataEnc  String   @default("{}")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  store  Store  @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionName])
+  @@index([tenantId, storeId])
+}
+
+/// Conexão OAuth do Bling (1 por loja) — catálogo e estoque.
+model BlingConnection {
+  id              String    @id @default(uuid())
+  tenantId        String
+  storeId         String
+  /// AES-GCM (mesmo padrão do telefone)
+  accessTokenEnc  String
+  refreshTokenEnc String
+  expiresAt       DateTime
+  /// connected | expired | disconnected
+  status          String    @default("connected")
+  accountLabel    String?
+  lastSyncAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   store  Store  @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, storeId])
+  @@index([tenantId, storeId])
+}
+
+/// Conexão OAuth Mercado Pago Marketplace (1 por loja) — split de comissão.
+model MercadoPagoConnection {
+  id              String    @id @default(uuid())
+  tenantId        String
+  storeId         String
+  accessTokenEnc  String
+  refreshTokenEnc String
+  expiresAt       DateTime
+  /// connected | expired | disconnected
+  status          String    @default("connected")
+  mpUserId        String?
+  accountLabel    String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  store  Store  @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, storeId])
+  @@index([tenantId, storeId])
 }

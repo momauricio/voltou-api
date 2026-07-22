@@ -7,7 +7,15 @@ export class PrismaService
   implements OnModuleInit, OnModuleDestroy
 {
   async onModuleInit(): Promise<void> {
-    await this.$connect();
+    try {
+      await this.$connect();
+    } catch (error) {
+      // Allow API boot without local Postgres (health still works).
+      console.warn(
+        '[Prisma] Could not connect to database. API will start anyway.',
+        error instanceof Error ? error.message : error,
+      );
+    }
   }
 
   async onModuleDestroy(): Promise<void> {

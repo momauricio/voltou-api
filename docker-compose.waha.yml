@@ -1,0 +1,26 @@
+# WAHA — WhatsApp HTTP API (https://waha.devlike.pro/)
+# Porta 3002 no host para não conflitar com Next (3000) e voltou-api (3001).
+#
+# 1) Gere credenciais (uma vez):
+#    docker run --rm -v "${PWD}/waha:/app/env" devlikeapro/waha init-waha /app/env
+#    (Windows PowerShell: docker run --rm -v "${PWD}/waha:/app/env" devlikeapro/waha init-waha /app/env)
+#
+# 2) Suba o serviço:
+#    docker compose -f docker-compose.waha.yml up -d
+#
+# 3) Copie WAHA_API_KEY do arquivo waha/.env para o .env da voltou-api
+#    WAHA_BASE_URL=http://localhost:3002
+
+services:
+  waha:
+    image: devlikeapro/waha
+    container_name: voltou-waha
+    restart: unless-stopped
+    ports:
+      - '3002:3000'
+    env_file:
+      - ./waha/.env
+    volumes:
+      - ./waha/sessions:/app/.sessions
+    environment:
+      - WHATSAPP_HOOK_EVENTS=
