@@ -18,6 +18,7 @@ import { ImportsModule } from './imports/imports.module';
 import { BlingModule } from './bling/bling.module';
 import { MercadoPagoModule } from './mercadopago/mercadopago.module';
 import { MetricsModule } from './metrics/metrics.module';
+import { InternalModule } from './internal/internal.module';
 
 @Module({
   imports: [
@@ -36,6 +37,7 @@ import { MetricsModule } from './metrics/metrics.module';
     BlingModule,
     MercadoPagoModule,
     MetricsModule,
+    InternalModule,
   ],
   controllers: [AppController],
   providers: [
