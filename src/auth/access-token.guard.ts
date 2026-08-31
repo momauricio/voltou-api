@@ -55,7 +55,8 @@ export class AccessTokenGuard implements CanActivate {
 
     req.user = payload;
 
-    // Staff operates across tenants (recovery is Voltou-run, not the merchant).
+    // Staff is a platform operator: recovery writes (campaign/checkout/contact)
+    // target any tenant. Do not rewrite tenantId from the JWT home tenant.
     if (isStaffRole(payload.role)) {
       return true;
     }

@@ -101,10 +101,19 @@ export class CustomersService {
       },
     });
     if (!customer) throw new NotFoundException('Cliente não encontrado.');
-    const lastContactedAt =
-      customer.customerEvents.find((e) => e.type === CUSTOMER_EVENT_CONTACTED)
-        ?.occurredAt ?? null;
-    return { ...customer, lastContactedAt };
+    const lastContact = await this.prisma.customerEvent.findFirst({
+      where: {
+        tenantId,
+        customerId,
+        type: CUSTOMER_EVENT_CONTACTED,
+      },
+      orderBy: { occurredAt: 'desc' },
+      select: { occurredAt: true },
+    });
+    return {
+      ...customer,
+      lastContactedAt: lastContact?.occurredAt ?? null,
+    };
   }
 
   async create(input: CreateCustomerInput) {

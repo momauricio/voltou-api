@@ -101,8 +101,25 @@ describe('staff gates (http)', () => {
       .send({ tenantId: '11111111-1111-1111-1111-111111111111' })
       .expect(403);
 
+    await request(app.getHttpServer())
+      .post('/campaigns/messages/m1/reject')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ tenantId: '11111111-1111-1111-1111-111111111111' })
+      .expect(403);
+
+    await request(app.getHttpServer())
+      .post('/campaigns/approve-all')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        tenantId: '11111111-1111-1111-1111-111111111111',
+        storeId: '22222222-2222-2222-2222-222222222222',
+      })
+      .expect(403);
+
     expect(campaigns.create).not.toHaveBeenCalled();
     expect(campaigns.approveMessage).not.toHaveBeenCalled();
+    expect(campaigns.rejectMessage).not.toHaveBeenCalled();
+    expect(campaigns.approveAll).not.toHaveBeenCalled();
   });
 
   it('forbids owner from creating payment checkouts', async () => {

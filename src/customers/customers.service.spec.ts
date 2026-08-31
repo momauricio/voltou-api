@@ -3,6 +3,7 @@ import { CustomersService } from './customers.service';
 describe('CustomersService lastContactedAt', () => {
   const prisma = {
     customer: { findMany: jest.fn(), findFirst: jest.fn() },
+    customerEvent: { findFirst: jest.fn() },
   };
   const service = new CustomersService(prisma as never);
 
@@ -40,6 +41,32 @@ describe('CustomersService lastContactedAt', () => {
     expect(
       (rows[0] as { customerEvents?: unknown }).customerEvents,
     ).toBeUndefined();
+  });
+
+  it('reads lastContactedAt on detail even when newer events fill the timeline', async () => {
+    const contactedAt = new Date('2026-07-01T12:00:00Z');
+    prisma.customer.findFirst.mockResolvedValue({
+      id: 'c1',
+      displayName: 'Ana',
+      customerEvents: Array.from({ length: 50 }, (_, i) => ({
+        type: 'note',
+        occurredAt: new Date(`2026-08-${String((i % 28) + 1).padStart(2, '0')}T00:00:00Z`),
+      })),
+    });
+    prisma.customerEvent.findFirst.mockResolvedValue({ occurredAt: contactedAt });
+
+    const detail = await service.getDetail('tenant-1', 'c1');
+
+    expect(prisma.customerEvent.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          tenantId: 'tenant-1',
+          customerId: 'c1',
+          type: 'contacted',
+        },
+      }),
+    );
+    expect(detail.lastContactedAt).toEqual(contactedAt);
   });
 
   it('returns null lastContactedAt when staff has not contacted the customer', async () => {

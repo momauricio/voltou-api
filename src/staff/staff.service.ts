@@ -2,6 +2,16 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CUSTOMER_EVENT_CONTACTED } from '../customers/customer-events';
 import { RegisterContactInput } from '../shared/schemas';
+import { decryptPhone } from '../common/phone.util';
+
+function decryptPhoneSafe(phoneEnc?: string | null): string | null {
+  if (!phoneEnc) return null;
+  try {
+    return decryptPhone(phoneEnc);
+  } catch {
+    return null;
+  }
+}
 
 export type RegisterContactCommand = RegisterContactInput & {
   staffUserId: string;
@@ -37,6 +47,7 @@ export class StaffService {
 
     return rows.map(({ customerEvents, phoneHash, phoneEnc, ...customer }) => ({
       ...customer,
+      phoneE164: decryptPhoneSafe(phoneEnc),
       lastContactedAt: customerEvents[0]?.occurredAt ?? null,
     }));
   }

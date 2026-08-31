@@ -1,6 +1,7 @@
 import { NotFoundException } from '@nestjs/common';
 import { StaffService } from './staff.service';
 import { CUSTOMER_EVENT_CONTACTED } from '../customers/customer-events';
+import { encryptPhone } from '../common/phone.util';
 
 describe('StaffService', () => {
   const prisma = {
@@ -55,7 +56,9 @@ describe('StaffService', () => {
         tenantId: 't1',
         storeId: 's1',
         displayName: 'Ana',
-        phoneMasked: '+55 ****-0001',
+        phoneMasked: '(11) *****-0001',
+        phoneEnc: encryptPhone('+5511999990001'),
+        phoneHash: 'hash-ana',
         optedOutAt: null,
         createdAt: new Date(),
         customerEvents: [{ occurredAt: contactedAt }],
@@ -83,6 +86,9 @@ describe('StaffService', () => {
     expect(customers[1].lastContactedAt).toBeNull();
     expect(customers[0].tenant.name).toBe('Tenant A');
     expect(customers[1].store.name).toBe('Loja B');
+    expect(customers[0].phoneE164).toBe('+5511999990001');
+    expect(customers[0]).not.toHaveProperty('phoneEnc');
+    expect(customers[0]).not.toHaveProperty('phoneHash');
   });
 
   it('persists a contacted event with occurredAt for merchant cards', async () => {

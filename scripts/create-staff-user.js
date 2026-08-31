@@ -1,14 +1,16 @@
 /**
  * Cria (ou atualiza) um usuário staff Voltou, separado da sessão do lojista.
- * Uso: node scripts/create-staff-user.js
+ * Uso: STAFF_EMAIL=... STAFF_PASSWORD=... node scripts/create-staff-user.js
  *
- * Variáveis opcionais: STAFF_EMAIL, STAFF_PASSWORD, STAFF_NAME
+ * Variáveis: STAFF_EMAIL (obrigatório), STAFF_PASSWORD (obrigatório, mín. 8),
+ * STAFF_NAME (opcional). Para promover um email que já é owner:
+ * FORCE_STAFF_PROMOTE=1
  */
 const { PrismaClient } = require('@prisma/client');
 const { randomBytes, scryptSync } = require('crypto');
 
-const EMAIL = (process.env.STAFF_EMAIL ?? 'staff@voltou.com').toLowerCase();
-const PASSWORD = process.env.STAFF_PASSWORD ?? 'staff1234';
+const EMAIL = (process.env.STAFF_EMAIL ?? '').trim().toLowerCase();
+const PASSWORD = process.env.STAFF_PASSWORD ?? '';
 const OWNER_NAME = process.env.STAFF_NAME ?? 'Equipe Voltou';
 const TENANT_NAME = 'Voltou Staff';
 const TENANT_SLUG = 'voltou-staff';
@@ -21,6 +23,15 @@ function hashPassword(password) {
 }
 
 async function main() {
+  if (!EMAIL || !EMAIL.includes('@')) {
+    console.error('Defina STAFF_EMAIL.');
+    process.exit(1);
+  }
+  if (PASSWORD.length < 8) {
+    console.error('Defina STAFF_PASSWORD com no mínimo 8 caracteres.');
+    process.exit(1);
+  }
+
   const prisma = new PrismaClient();
   const passwordHash = hashPassword(PASSWORD);
 
@@ -36,6 +47,18 @@ async function main() {
   }
 
   const existing = await prisma.user.findUnique({ where: { email: EMAIL } });
+  if (
+    existing &&
+    existing.role !== 'staff' &&
+    process.env.FORCE_STAFF_PROMOTE !== '1'
+  ) {
+    console.error(
+      `Email ${EMAIL} já existe com role=${existing.role}. Recuse promover um lojista sem FORCE_STAFF_PROMOTE=1.`,
+    );
+    await prisma.$disconnect();
+    process.exit(1);
+  }
+
   const user = existing
     ? await prisma.user.update({
         where: { id: existing.id },
