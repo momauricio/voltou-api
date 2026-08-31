@@ -15,9 +15,12 @@ import {
 import {
   CreatePaymentLinkInput,
   CreatePaymentLinkResult,
+  CreateTransparentPaymentInput,
   PaymentProvider,
+  TransparentPaymentResult,
 } from '../checkout/payment-provider';
 import { MercadoPagoClient, type MpTokenResponse } from './mercadopago.client';
+import { randomUUID } from 'crypto';
 
 export type MpConnectionView = {
   connected: boolean;
@@ -49,6 +52,10 @@ export class MercadoPagoService implements PaymentProvider {
       where: { tenantId_storeId: { tenantId, storeId } },
     });
     return Boolean(row && row.status === 'connected');
+  }
+
+  getPublicKey(): string | null {
+    return this.mp.getPublicKey();
   }
 
   async getAuthorizeUrl(tenantId: string, storeId: string) {
@@ -257,6 +264,45 @@ export class MercadoPagoService implements PaymentProvider {
       initPoint: preference.init_point,
       providerRef: preference.id,
     };
+  }
+
+  /**
+   * Checkout Transparente: cria /v1/payments with the seller OAuth token.
+   * application_fee is omitted — MP rejects it on seller-token charges.
+   */
+  async createTransparentPayment(
+    input: CreateTransparentPaymentInput,
+  ): Promise<TransparentPaymentResult> {
+    const accessToken = await this.getValidAccessToken(
+      input.tenantId,
+      input.storeId,
+    );
+    const apiUrl =
+      process.env.API_PUBLIC_URL ??
+      process.env.WEB_URL?.replace(':3000', ':3001') ??
+      'http://localhost:3001';
+
+    try {
+      return await this.mp.createPayment(accessToken, {
+        amountCents: input.amountCents,
+        description: input.title,
+        paymentMethodId: input.paymentMethodId,
+        payerEmail: input.payerEmail,
+        externalReference: input.checkoutId,
+        notificationUrl: `${apiUrl}/mercadopago/webhook`,
+        token: input.token,
+        installments: input.installments,
+        issuerId: input.issuerId,
+        payerIdentification: input.payerIdentification,
+        idempotencyKey: randomUUID(),
+      });
+    } catch (err) {
+      throw new BadRequestException(
+        err instanceof Error
+          ? err.message
+          : 'Não foi possível criar o pagamento no Mercado Pago.',
+      );
+    }
   }
 
   /**

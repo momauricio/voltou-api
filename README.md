@@ -89,6 +89,7 @@ Sem as envs do Bling, a API responde 503 claro ao tentar conectar.
 ```env
 MP_CLIENT_ID=<client-id>
 MP_CLIENT_SECRET=<client-secret>
+MP_PUBLIC_KEY=<public-key-do-app-integrador>
 MP_REDIRECT_URI=http://localhost:3000/painel/perfil/mercadopago/callback
 API_PUBLIC_URL=http://localhost:3001
 WEB_URL=http://localhost:3000
@@ -96,7 +97,8 @@ MP_USE_SANDBOX=1
 ```
 
 4. No painel (`/painel/perfil`), card **Pagamentos e comissão** → Conectar Mercado Pago.
-5. Checkouts geram `/p/{token}` no web; com MP conectado, a Preference inclui `marketplace_fee` = comissão Voltou (`Tenant.commissionRateBps`).
+5. Checkouts geram `/loja/{slug}/{cupom}` no web. GET da oferta pública devolve `paymentMode: 'transparent'` e `mpPublicKey` quando o MP está conectado. Payment Brick chama `POST /offers/public/:slug/:coupon/payments` (Pix/cartão via `/v1/payments` com o token OAuth do lojista). Checkout Pro (`POST .../pay` + Preference com `marketplace_fee`) continua disponível.
+6. Em `/v1/payments` **não** enviamos `application_fee` — o Mercado Pago rejeita esse campo com o token do vendedor (`You cannot use application_fee with this payment.`). A comissão Voltou (`commissionCents`) continua gravada no checkout/venda no nosso banco. Erros de identidade Pix/KYC do Mercado Pago (ex.: `Error in Financial Identity Use Case`) são repassados; não há workaround no código.
 
 Sem as envs do MP, OAuth retorna 503 e o checkout fica em modo stub (sem `init_point`).
 

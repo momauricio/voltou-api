@@ -2,9 +2,23 @@ import {
   Injectable,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import {
+  buildMpPaymentBody,
+  mapMpPaymentToResult,
+  mpPaymentErrorMessage,
+  type MpPaymentApiResponse,
+  type MpTransparentPaymentInput,
+  type TransparentPaymentResult,
+} from './mp-transparent-payment';
 
 const AUTH_BASE = 'https://auth.mercadopago.com.br/authorization';
 const API_BASE = 'https://api.mercadopago.com';
+
+export type { TransparentPaymentResult };
+
+export type MpCreatePaymentInput = MpTransparentPaymentInput & {
+  idempotencyKey: string;
+};
 
 export type MpTokenResponse = {
   access_token: string;
@@ -29,6 +43,11 @@ export class MercadoPagoClient {
         process.env.MP_CLIENT_SECRET?.trim() &&
         process.env.MP_REDIRECT_URI?.trim(),
     );
+  }
+
+  /** Integrator public key for Payment Brick (frontend). */
+  getPublicKey(): string | null {
+    return process.env.MP_PUBLIC_KEY?.trim() || null;
   }
 
   assertConfigured() {
@@ -189,6 +208,35 @@ export class MercadoPagoClient {
           : data.init_point,
       sandbox_init_point: data.sandbox_init_point,
     };
+  }
+
+  /**
+   * Checkout Transparente: POST /v1/payments with the seller OAuth token.
+   * Never sends application_fee — MP rejects it on this auth mode.
+   */
+  async createPayment(
+    accessToken: string,
+    input: MpCreatePaymentInput,
+  ): Promise<TransparentPaymentResult> {
+    const body = buildMpPaymentBody(input);
+
+    const res = await fetch(`${API_BASE}/v1/payments`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        'X-Idempotency-Key': input.idempotencyKey,
+      },
+      body: JSON.stringify(body),
+    });
+
+    const data = (await res.json().catch(() => ({}))) as MpPaymentApiResponse;
+    if (!res.ok || data.id == null) {
+      throw new Error(mpPaymentErrorMessage(data, res.status));
+    }
+
+    return mapMpPaymentToResult(data, input.amountCents);
   }
 
   async getPayment(accessToken: string, paymentId: string) {
