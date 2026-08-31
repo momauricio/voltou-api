@@ -13,7 +13,6 @@ export type MpTransparentPaymentInput = {
   payerEmail: string;
   externalReference: string;
   notificationUrl: string;
-  commissionCents?: number;
   token?: string;
   installments?: number;
   issuerId?: string;
@@ -94,6 +93,21 @@ export function mapMpPaymentToResult(
     pixQrCodeBase64: td?.qr_code_base64 ?? null,
     pixTicketUrl: td?.ticket_url ?? null,
   };
+}
+
+/** Stable enough to dedupe Brick retries; card tokens are one-shot so each token is a new intent. */
+export function sellerTokenPaymentIdempotencyKey(input: {
+  checkoutId: string;
+  paymentMethodId: string;
+  amountCents: number;
+  token?: string;
+}): string {
+  const method = input.paymentMethodId.trim().toLowerCase();
+  const tokenPart = input.token?.trim() || 'no-token';
+  return `${input.checkoutId}:${method}:${input.amountCents}:${tokenPart}`.slice(
+    0,
+    255,
+  );
 }
 
 export function mpPaymentErrorMessage(

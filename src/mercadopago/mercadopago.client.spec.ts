@@ -31,7 +31,6 @@ describe('MercadoPagoClient.createPayment', () => {
       payerEmail: 'teste.checkout@voltouapp.com',
       externalReference: 'chk-1',
       notificationUrl: 'https://api.example/mercadopago/webhook',
-      commissionCents: 25,
       idempotencyKey: 'idem-1',
     });
 
@@ -71,7 +70,6 @@ describe('MercadoPagoClient.createPayment', () => {
         payerEmail: 'a@b.com',
         externalReference: 'chk-1',
         notificationUrl: 'https://api.example/mercadopago/webhook',
-        commissionCents: 25,
         idempotencyKey: 'idem-2',
       }),
     ).rejects.toThrow('Error in Financial Identity Use Case');

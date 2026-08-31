@@ -20,7 +20,7 @@ import {
   TransparentPaymentResult,
 } from '../checkout/payment-provider';
 import { MercadoPagoClient, type MpTokenResponse } from './mercadopago.client';
-import { randomUUID } from 'crypto';
+import { sellerTokenPaymentIdempotencyKey } from './mp-transparent-payment';
 
 export type MpConnectionView = {
   connected: boolean;
@@ -155,7 +155,8 @@ export class MercadoPagoService implements PaymentProvider {
     const row = await this.prisma.mercadoPagoConnection.findUnique({
       where: { tenantId_storeId: { tenantId, storeId } },
     });
-    if (!row) throw new NotFoundException('Conexão Mercado Pago não encontrada.');
+    if (!row)
+      throw new NotFoundException('Conexão Mercado Pago não encontrada.');
 
     await this.prisma.mercadoPagoConnection.update({
       where: { id: row.id },
@@ -273,16 +274,16 @@ export class MercadoPagoService implements PaymentProvider {
   async createTransparentPayment(
     input: CreateTransparentPaymentInput,
   ): Promise<TransparentPaymentResult> {
-    const accessToken = await this.getValidAccessToken(
-      input.tenantId,
-      input.storeId,
-    );
     const apiUrl =
       process.env.API_PUBLIC_URL ??
       process.env.WEB_URL?.replace(':3000', ':3001') ??
       'http://localhost:3001';
 
     try {
+      const accessToken = await this.getValidAccessToken(
+        input.tenantId,
+        input.storeId,
+      );
       return await this.mp.createPayment(accessToken, {
         amountCents: input.amountCents,
         description: input.title,
@@ -294,9 +295,20 @@ export class MercadoPagoService implements PaymentProvider {
         installments: input.installments,
         issuerId: input.issuerId,
         payerIdentification: input.payerIdentification,
-        idempotencyKey: randomUUID(),
+        idempotencyKey: sellerTokenPaymentIdempotencyKey({
+          checkoutId: input.checkoutId,
+          paymentMethodId: input.paymentMethodId,
+          amountCents: input.amountCents,
+          token: input.token,
+        }),
       });
     } catch (err) {
+      if (err instanceof BadRequestException) throw err;
+      if (err instanceof UnauthorizedException) {
+        throw new BadRequestException(
+          'Pagamento indisponível. A loja precisa conectar o Mercado Pago.',
+        );
+      }
       throw new BadRequestException(
         err instanceof Error
           ? err.message

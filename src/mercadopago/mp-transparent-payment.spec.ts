@@ -1,6 +1,7 @@
 import {
   buildMpPaymentBody,
   mapMpPaymentToResult,
+  sellerTokenPaymentIdempotencyKey,
 } from './mp-transparent-payment';
 
 const pixInput = {
@@ -10,7 +11,6 @@ const pixInput = {
   payerEmail: 'teste.checkout@voltouapp.com',
   externalReference: 'checkout-1',
   notificationUrl: 'https://api.voltouapp.com/mercadopago/webhook',
-  commissionCents: 25,
 };
 
 describe('buildMpPaymentBody', () => {
@@ -96,5 +96,22 @@ describe('mapMpPaymentToResult', () => {
     expect(result.pixQrCode).toBeNull();
     expect(result.pixQrCodeBase64).toBeNull();
     expect(result.pixTicketUrl).toBeNull();
+  });
+});
+
+describe('sellerTokenPaymentIdempotencyKey', () => {
+  it('is stable for the same Pix intent', () => {
+    const a = sellerTokenPaymentIdempotencyKey({
+      checkoutId: 'chk-1',
+      paymentMethodId: 'pix',
+      amountCents: 500,
+    });
+    const b = sellerTokenPaymentIdempotencyKey({
+      checkoutId: 'chk-1',
+      paymentMethodId: 'PIX',
+      amountCents: 500,
+    });
+    expect(a).toBe('chk-1:pix:500:no-token');
+    expect(b).toBe(a);
   });
 });
