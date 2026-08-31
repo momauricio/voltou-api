@@ -7,7 +7,10 @@ import {
   Inject,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { CreateCheckoutInput } from '../shared/schemas';
+import {
+  CreateCheckoutInput,
+  CreateTransparentOfferPaymentInput,
+} from '../shared/schemas';
 import { randomBytes, randomUUID } from 'crypto';
 import {
   PAYMENT_PROVIDER,
@@ -39,6 +42,7 @@ import {
   expectedPaidLines,
   findMissingPaidLines,
 } from './mark-paid-sales';
+import { publicOfferPaymentFields } from './public-offer-payment';
 
 @Injectable()
 export class CheckoutService {
@@ -353,6 +357,16 @@ export class CheckoutService {
       selectedByDefault: addon.selectedByDefault,
     }));
 
+    const mpConnected = this.paymentProvider
+      ? await this.paymentProvider.isConnected(fresh.tenantId, fresh.storeId)
+      : false;
+    const payment = publicOfferPaymentFields({
+      status,
+      mpConnected,
+      mpPublicKey: this.paymentProvider?.getPublicKey() ?? null,
+      providerInitPoint: fresh.providerInitPoint,
+    });
+
     return {
       id: fresh.id,
       status,
@@ -370,10 +384,10 @@ export class CheckoutService {
       customerFirstName: firstName(fresh.customer.displayName),
       expiresAt: fresh.expiresAt,
       paidAt: fresh.paidAt,
-      canPay:
-        status === 'pending' &&
-        fresh.provider === 'mercadopago' &&
-        Boolean(fresh.providerInitPoint),
+      ...payment,
+      deliveryEnabled: false,
+      shippingCents: 0,
+      pickupAddressText: null as string | null,
       addons,
       discountCaps,
       branding: {
@@ -486,6 +500,114 @@ export class CheckoutService {
     });
 
     return { checkout_url: link.initPoint };
+  }
+
+  /**
+   * Checkout Transparente used by Payment Brick (POST /offers/public/.../payments).
+   * Records commissionCents in our DB; MP split via application_fee is omitted.
+   */
+  async createPublicPayment(
+    storeSlug: string,
+    coupon: string,
+    input: CreateTransparentOfferPaymentInput,
+  ) {
+    const checkout = await this.findByStoreSlugAndCoupon(storeSlug, coupon);
+    const expired =
+      checkout.expiresAt != null && checkout.expiresAt.getTime() < Date.now();
+    if (expired && checkout.status === 'pending') {
+      throw new BadRequestException('Este link de pagamento expirou.');
+    }
+    if (checkout.status === 'paid') {
+      throw new BadRequestException('Este pagamento já foi confirmado.');
+    }
+    if (checkout.status !== 'pending') {
+      throw new BadRequestException('Checkout indisponível.');
+    }
+    if (!checkout.productId) {
+      throw new BadRequestException('Checkout sem produto principal.');
+    }
+
+    if (!this.paymentProvider) {
+      throw new BadRequestException(
+        'Pagamento indisponível. A loja precisa conectar o Mercado Pago.',
+      );
+    }
+
+    const connected = await this.paymentProvider.isConnected(
+      checkout.tenantId,
+      checkout.storeId,
+    );
+    if (!connected) {
+      throw new BadRequestException(
+        'Pagamento indisponível. A loja precisa conectar o Mercado Pago.',
+      );
+    }
+
+    const method = input.paymentMethodId.trim().toLowerCase();
+    if (method !== 'pix' && !input.token) {
+      throw new BadRequestException(
+        'Token do cartão obrigatório.',
+      );
+    }
+
+    const addons = parseAddonsJson(checkout.addonsJson);
+    const rules = await this.loadStoreRules(checkout.tenantId, checkout.storeId);
+    const caps = getDiscountCapsFromRules(rules);
+    const listPriceCents = checkout.listPriceCents ?? checkout.amountCents;
+
+    let lines: PaidLine[];
+    let total: number;
+    let commissionCents: number;
+    try {
+      ({ lines, total, commissionCents } = buildPaidLines({
+        productId: checkout.productId,
+        productNameSnapshot: checkout.productNameSnapshot,
+        listPriceCents,
+        discountBps: checkout.discountBps,
+        addons,
+        selectedAddonIds: input.selectedAddonIds ?? [],
+        caps,
+        commissionRateBps: checkout.commissionRateBps,
+      }));
+    } catch (e) {
+      if (e instanceof UnknownCheckoutAddonError) {
+        throw new BadRequestException(e.message);
+      }
+      throw e;
+    }
+
+    const result = await this.paymentProvider.createTransparentPayment({
+      tenantId: checkout.tenantId,
+      storeId: checkout.storeId,
+      checkoutId: checkout.id,
+      amountCents: total,
+      title: checkout.productNameSnapshot,
+      paymentMethodId: method,
+      payerEmail: input.payerEmail,
+      token: input.token,
+      installments: input.installments,
+      issuerId: input.issuerId,
+      payerIdentification: input.payerIdentification,
+    });
+
+    await this.prisma.checkout.update({
+      where: { id: checkout.id },
+      data: {
+        commissionCents,
+        paidLinesJson: serializePaidLines(lines),
+        provider: 'mercadopago',
+        providerRef: String(result.paymentId),
+        mpPaymentId: String(result.paymentId),
+      },
+    });
+
+    if (result.status === 'approved') {
+      await this.markPaid(checkout.id, checkout.tenantId, {
+        mpPaymentId: String(result.paymentId),
+      });
+    }
+
+    return result;
   }
 
   async getPublicOfferStatus(storeSlug: string, coupon: string) {

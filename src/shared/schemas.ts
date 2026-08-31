@@ -96,6 +96,39 @@ export const createCheckoutSchema = z.object({
 
 export type CreateCheckoutInput = z.infer<typeof createCheckoutSchema>;
 
+export const createTransparentOfferPaymentSchema = z.object({
+  selectedAddonIds: z.array(z.string()).optional().default([]),
+  paymentMethodId: z.string().trim().min(1).max(40),
+  token: z.string().trim().min(1).max(200).optional(),
+  installments: z.number().int().positive().max(24).optional(),
+  issuerId: z.string().trim().min(1).max(40).optional(),
+  payerEmail: z.string().trim().email().max(255),
+  payerIdentification: z
+    .object({
+      type: z.string().trim().min(1).max(20),
+      number: z.string().trim().min(1).max(32),
+    })
+    .optional(),
+  fulfillmentMethod: z.enum(['pickup', 'delivery']).default('pickup'),
+  shippingAddress: z
+    .object({
+      recipientName: z.string().trim().min(1).max(200),
+      phoneE164: z.string().trim().min(8).max(30),
+      cep: z.string().trim().min(8).max(16),
+      street: z.string().trim().min(1).max(200),
+      number: z.string().trim().min(1).max(20),
+      complement: z.string().trim().max(120).optional(),
+      neighborhood: z.string().trim().min(1).max(120),
+      city: z.string().trim().min(1).max(120),
+      state: z.string().trim().min(2).max(2),
+    })
+    .optional(),
+});
+
+export type CreateTransparentOfferPaymentInput = z.infer<
+  typeof createTransparentOfferPaymentSchema
+>;
+
 export const createProductSchema = z.object({
   tenantId: tenantIdSchema,
   storeId: storeIdSchema,
