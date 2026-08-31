@@ -8,6 +8,8 @@ import {
   Query,
 } from '@nestjs/common';
 import { Public } from '../auth/public.decorator';
+import { Roles } from '../auth/roles.decorator';
+import { USER_ROLES } from '../auth/roles';
 import { z } from 'zod';
 import { CampaignsService } from './campaigns.service';
 
@@ -48,6 +50,7 @@ export class CampaignsController {
     return this.campaignsService.list(tenantId, storeId);
   }
 
+  @Roles(USER_ROLES.STAFF)
   @Post()
   create(@Body() body: unknown) {
     const parsed = createCampaignSchema.safeParse(body);
@@ -77,6 +80,7 @@ export class CampaignsController {
     );
   }
 
+  @Roles(USER_ROLES.STAFF)
   @Post('messages/:id/approve')
   approve(@Param('id') id: string, @Body() body: { tenantId?: string }) {
     if (!body?.tenantId) {
@@ -85,6 +89,7 @@ export class CampaignsController {
     return this.campaignsService.approveMessage(body.tenantId, id);
   }
 
+  @Roles(USER_ROLES.STAFF)
   @Post('messages/:id/reject')
   reject(@Param('id') id: string, @Body() body: { tenantId?: string }) {
     if (!body?.tenantId) {
@@ -93,6 +98,7 @@ export class CampaignsController {
     return this.campaignsService.rejectMessage(body.tenantId, id);
   }
 
+  @Roles(USER_ROLES.STAFF)
   @Post('approve-all')
   approveAll(
     @Body() body: { tenantId?: string; storeId?: string; campaignId?: string },

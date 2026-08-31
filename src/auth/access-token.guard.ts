@@ -8,6 +8,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import { IS_PUBLIC_KEY } from './public.decorator';
 import { verifyAccessToken } from './crypto.util';
+import { isStaffRole } from './roles';
 
 type AuthedRequest = {
   headers: Record<string, string | string[] | undefined>;
@@ -53,6 +54,11 @@ export class AccessTokenGuard implements CanActivate {
     }
 
     req.user = payload;
+
+    // Staff operates across tenants (recovery is Voltou-run, not the merchant).
+    if (isStaffRole(payload.role)) {
+      return true;
+    }
 
     if (!req.query || typeof req.query !== 'object') {
       req.query = {};

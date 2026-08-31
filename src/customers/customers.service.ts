@@ -14,6 +14,7 @@ import {
   maskPhone,
   normalizePhoneBr,
 } from '../common/phone.util';
+import { CUSTOMER_EVENT_CONTACTED } from './customer-events';
 
 @Injectable()
 export class CustomersService {
@@ -24,7 +25,7 @@ export class CustomersService {
   }
 
   async list(tenantId: string, storeId?: string) {
-    return this.prisma.customer.findMany({
+    const rows = await this.prisma.customer.findMany({
       where: {
         tenantId,
         ...(storeId ? { storeId } : {}),
@@ -51,6 +52,12 @@ export class CustomersService {
           orderBy: { sentAt: 'desc' },
           take: 10,
         },
+        customerEvents: {
+          where: { type: CUSTOMER_EVENT_CONTACTED },
+          orderBy: { occurredAt: 'desc' },
+          take: 1,
+          select: { occurredAt: true },
+        },
         _count: {
           select: {
             sales: true,
@@ -61,6 +68,11 @@ export class CustomersService {
       },
       orderBy: { createdAt: 'desc' },
     });
+
+    return rows.map(({ customerEvents, ...customer }) => ({
+      ...customer,
+      lastContactedAt: customerEvents[0]?.occurredAt ?? null,
+    }));
   }
 
   async getDetail(tenantId: string, customerId: string) {
@@ -89,7 +101,10 @@ export class CustomersService {
       },
     });
     if (!customer) throw new NotFoundException('Cliente não encontrado.');
-    return customer;
+    const lastContactedAt =
+      customer.customerEvents.find((e) => e.type === CUSTOMER_EVENT_CONTACTED)
+        ?.occurredAt ?? null;
+    return { ...customer, lastContactedAt };
   }
 
   async create(input: CreateCustomerInput) {

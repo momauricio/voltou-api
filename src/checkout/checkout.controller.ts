@@ -9,6 +9,8 @@ import {
 import { CheckoutService } from './checkout.service';
 import { createCheckoutSchema } from '../shared/schemas';
 import { Public } from '../auth/public.decorator';
+import { Roles } from '../auth/roles.decorator';
+import { USER_ROLES } from '../auth/roles';
 
 @Controller('checkouts')
 export class CheckoutController {
@@ -26,6 +28,7 @@ export class CheckoutController {
     return this.checkoutService.getByPublicToken(token);
   }
 
+  @Roles(USER_ROLES.STAFF)
   @Post()
   create(@Body() body: unknown) {
     const parsed = createCheckoutSchema.safeParse(body);
