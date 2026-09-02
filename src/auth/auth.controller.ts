@@ -5,6 +5,7 @@ import {
   Get,
   Headers,
   Post,
+  Query,
   UnauthorizedException,
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
@@ -12,6 +13,7 @@ import { Public } from './public.decorator';
 import {
   changePasswordSchema,
   forgotPasswordSchema,
+  googleAuthSchema,
   loginSchema,
   registerSchema,
   verifyEmailSchema,
@@ -46,6 +48,27 @@ export class AuthController {
       );
     }
     return this.authService.register(parsed.data);
+  }
+
+  @Public()
+  @Get('cnpj-status')
+  cnpjStatus(@Query('cnpj') cnpj?: string) {
+    if (!cnpj?.trim()) {
+      throw new BadRequestException('Informe o CNPJ.');
+    }
+    return this.authService.cnpjStatus(cnpj.trim());
+  }
+
+  @Public()
+  @Post('google')
+  google(@Body() body: unknown) {
+    const parsed = googleAuthSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new BadRequestException(
+        parsed.error.issues.map((i) => i.message).join(', '),
+      );
+    }
+    return this.authService.googleLogin(parsed.data);
   }
 
   @Public()

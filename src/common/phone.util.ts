@@ -48,3 +48,31 @@ export function normalizePhoneBr(input: string): string {
   if (input.startsWith('+')) return `+${digits}`;
   return `+${digits}`;
 }
+
+/**
+ * Lojista (owner) WhatsApp identity: Brazilian mobile only.
+ * Accepts national 11 digits (third digit 9) or E.164 / 55-prefixed digits.
+ * Never requires the client to send "+55".
+ */
+export const OWNER_PHONE_MSG =
+  'Informe um celular brasileiro com DDD (11 dígitos, nono dígito 9).';
+export function parseBrMobileE164(
+  input: string | undefined | null,
+): string | null {
+  if (input == null) return null;
+  const digits = input.replace(/\D/g, '');
+  if (!digits) return null;
+
+  let national: string;
+  if (digits.length === 13 && digits.startsWith('55')) {
+    national = digits.slice(2);
+  } else if (digits.length === 11) {
+    national = digits;
+  } else {
+    return null;
+  }
+
+  // DDD 11–99, subscriber starts with 9 (mobile), then 8 digits.
+  if (!/^[1-9]\d9\d{8}$/.test(national)) return null;
+  return `+55${national}`;
+}

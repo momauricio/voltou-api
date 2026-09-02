@@ -77,6 +77,10 @@ model User {
   ownerName            String
   email                String    @unique
   passwordHash         String
+  /// Lojista WhatsApp identity (BR mobile E.164). Unique; required at owner signup.
+  ownerPhoneE164       String?   @unique
+  /// Google subject (sub) when the owner signed in with Google.
+  googleSub            String?   @unique
   role                 String    @default("owner")
   emailVerifiedAt      DateTime?
   emailVerifyToken     String?
