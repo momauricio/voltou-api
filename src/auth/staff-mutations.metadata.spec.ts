@@ -34,7 +34,7 @@ describe('staff-only mutation metadata', () => {
     expect(rolesOf(CheckoutController.prototype, 'create')).toBeUndefined();
   });
 
-  it('requires staff for POST /checkouts/:id/mark-paid', () => {
+  it('staff-gates POST /checkouts/:id/mark-paid so owner JWT is 403', () => {
     expect(rolesOf(CheckoutController.prototype, 'markPaid')).toEqual([
       USER_ROLES.STAFF,
     ]);

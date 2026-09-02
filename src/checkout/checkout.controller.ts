@@ -40,7 +40,7 @@ export class CheckoutController {
     return this.checkoutService.create(parsed.data);
   }
 
-  /** Locked: only Mercado Pago webhook may call CheckoutService.markPaid. */
+  /** Staff-gated 403: HTTP cannot mark paid. Webhook calls CheckoutService.markPaid. */
   @Roles(USER_ROLES.STAFF)
   @Post(':id/mark-paid')
   markPaid() {

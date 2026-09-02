@@ -521,7 +521,7 @@ export class CheckoutService {
     };
   }
 
-  /** Marks checkout paid (webhook MP / simulate pay). */
+  /** Marks checkout paid after Mercado Pago webhook verification. HTTP cannot call this. */
   async markPaid(
     checkoutId: string,
     tenantId?: string,
