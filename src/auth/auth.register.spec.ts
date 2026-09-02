@@ -160,15 +160,61 @@ describe('AuthService.register (lojista)', () => {
     expect(created.stores.create.slug).not.toBe('principal');
   });
 
-  it('does not give two tenants store slug principal', async () => {
+  it('does not give two tenants named Principal the same store slug', async () => {
     const prisma = makePrisma();
+    const taken = new Set<string>();
+    prisma.store.findUnique.mockImplementation(
+      async ({ where }: { where: { slug?: string } }) =>
+        where.slug && taken.has(where.slug)
+          ? { id: `s-${where.slug}` }
+          : null,
+    );
+    prisma.tenant.findUnique.mockImplementation(
+      async ({ where }: { where: { slug?: string } }) =>
+        where.slug && taken.has(where.slug)
+          ? { id: `t-${where.slug}` }
+          : null,
+    );
+    prisma.tenant.create.mockImplementation(
+      async ({
+        data,
+      }: {
+        data: {
+          name: string;
+          slug: string;
+          cnpj: string;
+          users: { create: Record<string, unknown> };
+          stores: { create: { name: string; slug: string } };
+        };
+      }) => {
+        taken.add(data.slug);
+        taken.add(data.stores.create.slug);
+        return {
+          id: `tenant-${taken.size}`,
+          name: data.name,
+          slug: data.slug,
+          cnpj: data.cnpj,
+          users: [
+            {
+              id: 'user-1',
+              tenantId: 'tenant-1',
+              role: 'owner',
+              ...data.users.create,
+            },
+          ],
+          stores: [
+            { id: 'store-1', name: data.name, slug: data.stores.create.slug },
+          ],
+        };
+      },
+    );
     const service = new AuthService(prisma as never, email as never);
-    await service.register(registerInput);
+    await service.register({ ...registerInput, storeName: 'Principal' });
     await service.register({
       ...registerInput,
+      storeName: 'Principal',
       email: 'joao@loja.test',
       ownerPhoneE164: '+5511911111111',
-      storeName: 'Loja do Joao',
       cnpj: '99888777000166',
     });
     const slugOf = (call: number) =>
@@ -177,10 +223,8 @@ describe('AuthService.register (lojista)', () => {
           stores: { create: { slug: string } };
         }
       ).stores.create.slug;
-    expect(slugOf(0)).toBe('loja-da-maria');
-    expect(slugOf(1)).toBe('loja-do-joao');
-    expect(slugOf(0)).not.toBe('principal');
-    expect(slugOf(1)).not.toBe('principal');
+    expect(slugOf(0)).toBe('principal');
+    expect(slugOf(1)).toBe('principal-1');
     expect(slugOf(0)).not.toBe(slugOf(1));
   });
 

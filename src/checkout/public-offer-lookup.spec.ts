@@ -147,4 +147,24 @@ describe('Store.slug uniqueness in prisma schema', () => {
     const storeBlock = schema.match(/model Store \{[\s\S]*?\n\}/)?.[0] ?? '';
     expect(storeBlock).toMatch(/slug\s+String\s+@unique/);
   });
+
+  it('pins the earliest principal row so later duplicate rewrites cannot steal it', () => {
+    const fs = require('fs') as typeof import('fs');
+    const path = require('path') as typeof import('path');
+    const sql = fs.readFileSync(
+      path.join(
+        __dirname,
+        '../../prisma/migrations/20260902140000_store_slug_unique/migration.sql',
+      ),
+      'utf8',
+    );
+    expect(sql).toMatch(/_store_slug_keep/);
+    expect(sql).toMatch(/WHERE "slug" = 'principal'/);
+    expect(sql).toMatch(
+      /ORDER BY datetime\("createdAt"\) ASC, "id" ASC/,
+    );
+    expect(sql).toMatch(
+      /WHERE "id" NOT IN \(SELECT "id" FROM "_store_slug_keep"\)/,
+    );
+  });
 });
