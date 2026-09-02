@@ -50,6 +50,14 @@ model Store {
   /// geist | dm-sans | space-grotesk | nunito | playfair | source-serif
   checkoutFontFamily       String?
   checkoutMessage          String?
+  /// Public /loja: offer delivery vs pickup-only
+  deliveryEnabled          Boolean  @default(true)
+  /// Fixed shipping in cents (0 = free). Commission excludes this.
+  shippingCents            Int      @default(0)
+  /// Pickup address/hours shown on /loja
+  pickupAddressText        String?
+  /// WhatsApp for order alerts (not the WAHA sales session)
+  orderNotifyPhoneE164     String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
