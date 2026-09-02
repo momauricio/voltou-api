@@ -5,9 +5,10 @@ import {
   ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
-import { parseBrMobileE164 } from '../common/phone.util';
+import { OWNER_PHONE_MSG, parseBrMobileE164 } from '../common/phone.util';
 import {
   ChangePasswordInput,
   ForgotPasswordInput,
@@ -27,9 +28,6 @@ import {
   verifyAccessToken,
   verifyPassword,
 } from './crypto.util';
-
-const OWNER_PHONE_MSG =
-  'Informe um celular brasileiro com DDD (11 dígitos, nono dígito 9).';
 
 type OwnerWithTenant = {
   id: string;
@@ -58,11 +56,14 @@ export class AuthService {
     try {
       return await getCnpjStatus(cnpj);
     } catch (error) {
-      throw new BadRequestException(
+      const message =
         error instanceof Error
           ? error.message
-          : 'Não foi possível validar o CNPJ agora. Tente novamente.',
-      );
+          : 'Não foi possível validar o CNPJ agora. Tente novamente.';
+      if (/tente novamente/i.test(message)) {
+        throw new ServiceUnavailableException(message);
+      }
+      throw new BadRequestException(message);
     }
   }
 
@@ -154,6 +155,9 @@ export class AuthService {
     }
 
     const claims = await verifyGoogleIdToken(input.idToken);
+    if (!claims.emailVerified) {
+      throw new UnauthorizedException('Email Google não verificado.');
+    }
 
     const include = { tenant: { include: { stores: true } } } as const;
     let user = await this.prisma.user.findUnique({
@@ -167,23 +171,35 @@ export class AuthService {
         include,
       });
       if (user) {
+        if (user.role !== 'owner') {
+          throw new ConflictException(
+            'Este email não pode ser usado para login de lojista.',
+          );
+        }
         if (user.googleSub && user.googleSub !== claims.sub) {
           throw new ConflictException(
             'Este email já está vinculado a outra conta Google.',
           );
         }
+        if (!user.emailVerifiedAt) {
+          throw new ConflictException(
+            'Já existe uma conta com este email. Confirme o email antes de entrar com Google.',
+          );
+        }
         user = await this.prisma.user.update({
           where: { id: user.id },
-          data: {
-            googleSub: claims.sub,
-            emailVerifiedAt: user.emailVerifiedAt ?? new Date(),
-          },
+          data: { googleSub: claims.sub },
           include,
         });
       }
     }
 
     if (user) {
+      if (user.role !== 'owner') {
+        throw new ConflictException(
+          'Este email não pode ser usado para login de lojista.',
+        );
+      }
       return this.issueSession(user);
     }
 
@@ -425,7 +441,7 @@ export class AuthService {
       slug = `${baseSlug}-${i++}`;
     }
 
-    const userData: Record<string, unknown> = {
+    const userData: Prisma.UserCreateWithoutTenantInput = {
       ownerName: input.ownerName,
       email: input.email,
       passwordHash: input.passwordHash,
@@ -433,10 +449,8 @@ export class AuthService {
       role: 'owner',
       emailVerifyToken: input.emailVerifyToken,
       emailVerifiedAt: input.emailVerifiedAt,
+      ...(input.googleSub ? { googleSub: input.googleSub } : {}),
     };
-    if (input.googleSub) {
-      userData.googleSub = input.googleSub;
-    }
 
     return this.prisma.tenant.create({
       data: {
@@ -450,16 +464,7 @@ export class AuthService {
           },
         },
         users: {
-          create: userData as {
-            ownerName: string;
-            email: string;
-            passwordHash: string;
-            ownerPhoneE164: string;
-            role: string;
-            emailVerifyToken: string | null;
-            emailVerifiedAt: Date | null;
-            googleSub?: string;
-          },
+          create: userData,
         },
       },
       include: { users: true, stores: true },

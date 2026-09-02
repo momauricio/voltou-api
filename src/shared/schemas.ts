@@ -1,11 +1,8 @@
 import { z } from 'zod';
-import { parseBrMobileE164 } from '../common/phone.util';
+import { parseBrMobileE164, OWNER_PHONE_MSG } from '../common/phone.util';
 
 export const tenantIdSchema = z.string().uuid();
 export const storeIdSchema = z.string().uuid();
-
-const OWNER_PHONE_MSG =
-  'Informe um celular brasileiro com DDD (11 dígitos, nono dígito 9).';
 
 function parseOwnerPhoneFields(data: {
   ownerPhone?: string;

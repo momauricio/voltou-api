@@ -34,6 +34,7 @@ describe('verifyGoogleIdToken', () => {
       ok: true,
       json: async () => ({
         aud: 'real-client.apps.googleusercontent.com',
+        iss: 'https://accounts.google.com',
         sub: 'sub-1',
         email: 'maria@gmail.com',
         email_verified: 'true',
@@ -48,6 +49,10 @@ describe('verifyGoogleIdToken', () => {
       name: 'Maria',
       emailVerified: true,
     });
+    expect(global.fetch).toHaveBeenCalledWith(
+      'https://oauth2.googleapis.com/tokeninfo',
+      expect.objectContaining({ method: 'POST' }),
+    );
   });
 
   it('rejects token when audience does not match GOOGLE_CLIENT_ID', async () => {
@@ -56,13 +61,33 @@ describe('verifyGoogleIdToken', () => {
       ok: true,
       json: async () => ({
         aud: 'someone-else.apps.googleusercontent.com',
+        iss: 'https://accounts.google.com',
         sub: 'sub-1',
         email: 'maria@gmail.com',
+        email_verified: 'true',
       }),
     }) as unknown as typeof fetch;
 
-    await expect(verifyGoogleIdToken('header.payload.sig')).rejects.toBeInstanceOf(
-      UnauthorizedException,
+    await expect(
+      verifyGoogleIdToken('header.payload.sig'),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
+  it('rejects unverified Google email', async () => {
+    process.env.GOOGLE_CLIENT_ID = 'real-client.apps.googleusercontent.com';
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        aud: 'real-client.apps.googleusercontent.com',
+        iss: 'https://accounts.google.com',
+        sub: 'sub-1',
+        email: 'maria@gmail.com',
+        email_verified: 'false',
+      }),
+    }) as unknown as typeof fetch;
+
+    await expect(verifyGoogleIdToken('header.payload.sig')).rejects.toThrow(
+      /não verificado/i,
     );
   });
 });

@@ -1,4 +1,4 @@
-import { BadRequestException, INestApplication, ServiceUnavailableException } from '@nestjs/common';
+import { INestApplication, ServiceUnavailableException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { AuthController } from './auth.controller';
@@ -111,12 +111,5 @@ describe('Auth HTTP (lojista signup)', () => {
         password: 'secret123',
       }),
     );
-  });
-});
-
-describe('Auth HTTP google 503 from missing env (service)', () => {
-  it('does not invent a client id — 503 is a Bad/unavailable path not 200', async () => {
-    expect(new BadRequestException().getStatus()).toBe(400);
-    expect(new ServiceUnavailableException().getStatus()).toBe(503);
   });
 });

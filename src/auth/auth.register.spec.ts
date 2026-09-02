@@ -1,7 +1,12 @@
-import { BadRequestException, ConflictException, ServiceUnavailableException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ServiceUnavailableException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { hashPassword } from './crypto.util';
-import { assertActiveCnpj } from './cnpj.util';
+import { assertActiveCnpj, getCnpjStatus } from './cnpj.util';
 import { getGoogleClientId, verifyGoogleIdToken } from './google-id-token';
 
 jest.mock('./cnpj.util', () => ({
@@ -22,6 +27,9 @@ const mockedVerifyGoogle = verifyGoogleIdToken as jest.MockedFunction<
 >;
 const mockedGoogleClientId = getGoogleClientId as jest.MockedFunction<
   typeof getGoogleClientId
+>;
+const mockedGetCnpjStatus = getCnpjStatus as jest.MockedFunction<
+  typeof getCnpjStatus
 >;
 
 function makePrisma() {
@@ -289,6 +297,133 @@ describe('AuthService.google', () => {
     expect(email.sendVerifyEmail).not.toHaveBeenCalled();
   });
 
+  it('rejects Google tokens whose email is not verified', async () => {
+    mockedVerifyGoogle.mockResolvedValue({
+      ...googleClaims,
+      emailVerified: false,
+    });
+    const prisma = makePrisma();
+    const service = new AuthService(prisma as never, email as never);
+    await expect(
+      service.googleLogin({ idToken: 'fake-google-id-token' }),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(prisma.tenant.create).not.toHaveBeenCalled();
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  it('does not auto-link an unverified email+password signup (no account squatting)', async () => {
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockImplementation(
+      async ({ where }: { where: Record<string, string> }) => {
+        if (where.email === 'maria@gmail.com') {
+          return {
+            id: 'u-unverified',
+            tenantId: 't-attacker',
+            email: 'maria@gmail.com',
+            ownerName: 'Attacker',
+            role: 'owner',
+            googleSub: null,
+            emailVerifiedAt: null,
+            tenant: { name: 'Fake', stores: [{ id: 's-x', name: 'Fake' }] },
+          };
+        }
+        return null;
+      },
+    );
+    const service = new AuthService(prisma as never, email as never);
+    await expect(
+      service.googleLogin({ idToken: 'fake-google-id-token' }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.user.update).not.toHaveBeenCalled();
+    expect(prisma.tenant.create).not.toHaveBeenCalled();
+  });
+
+  it('links a verified owner by email and stores googleSub', async () => {
+    const prisma = makePrisma();
+    const verified = {
+      id: 'u-owner',
+      tenantId: 't1',
+      email: 'maria@gmail.com',
+      ownerName: 'Maria Silva',
+      role: 'owner',
+      googleSub: null,
+      emailVerifiedAt: new Date(),
+      tenant: { name: 'Loja', stores: [{ id: 's1', name: 'Loja' }] },
+    };
+    prisma.user.findUnique.mockImplementation(
+      async ({ where }: { where: Record<string, string> }) => {
+        if (where.email === 'maria@gmail.com') return verified;
+        return null;
+      },
+    );
+    prisma.user.update.mockResolvedValue({
+      ...verified,
+      googleSub: 'google-sub-1',
+    });
+    const service = new AuthService(prisma as never, email as never);
+    const result = await service.googleLogin({ idToken: 'fake-google-id-token' });
+    expect(prisma.user.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'u-owner' },
+        data: expect.objectContaining({ googleSub: 'google-sub-1' }),
+      }),
+    );
+    expect(result.user.email).toBe('maria@gmail.com');
+    expect(prisma.tenant.create).not.toHaveBeenCalled();
+  });
+
+  it('does not attach Google login to a staff account with the same email', async () => {
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockImplementation(
+      async ({ where }: { where: Record<string, string> }) => {
+        if (where.email === 'maria@gmail.com') {
+          return {
+            id: 'u-staff',
+            tenantId: 't-staff',
+            email: 'maria@gmail.com',
+            ownerName: 'Equipe',
+            role: 'staff',
+            googleSub: null,
+            emailVerifiedAt: new Date(),
+            tenant: { name: 'Voltou', stores: [] },
+          };
+        }
+        return null;
+      },
+    );
+    const service = new AuthService(prisma as never, email as never);
+    await expect(
+      service.googleLogin({ idToken: 'fake-google-id-token' }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects when the email is already linked to a different googleSub', async () => {
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockImplementation(
+      async ({ where }: { where: Record<string, string> }) => {
+        if (where.email === 'maria@gmail.com') {
+          return {
+            id: 'u-other',
+            tenantId: 't1',
+            email: 'maria@gmail.com',
+            ownerName: 'Maria',
+            role: 'owner',
+            googleSub: 'someone-else',
+            emailVerifiedAt: new Date(),
+            tenant: { name: 'Loja', stores: [{ id: 's1', name: 'Loja' }] },
+          };
+        }
+        return null;
+      },
+    );
+    const service = new AuthService(prisma as never, email as never);
+    await expect(
+      service.googleLogin({ idToken: 'fake-google-id-token' }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
   it('returns 503 when GOOGLE_CLIENT_ID is missing and does not invent a client id', async () => {
     mockedGoogleClientId.mockReturnValue(null);
     const prisma = makePrisma();
@@ -317,5 +452,19 @@ describe('signup isolation', () => {
     expect(service).not.toMatch(/from ['"]\.\.\/staff/);
     expect(controller).not.toMatch(/mercadopago/i);
     expect(controller).not.toMatch(/from ['"]\.\.\/staff/);
+  });
+});
+
+describe('AuthService.cnpjStatus', () => {
+  const email = { sendVerifyEmail: jest.fn(), sendPasswordReset: jest.fn() };
+
+  it('maps BrasilAPI outage to 503, not 400', async () => {
+    mockedGetCnpjStatus.mockRejectedValue(
+      new Error('Não foi possível validar o CNPJ agora. Tente novamente.'),
+    );
+    const service = new AuthService(makePrisma() as never, email as never);
+    await expect(service.cnpjStatus('11222333000181')).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
+    );
   });
 });

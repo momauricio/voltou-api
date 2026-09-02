@@ -54,6 +54,8 @@ export function normalizePhoneBr(input: string): string {
  * Accepts national 11 digits (third digit 9) or E.164 / 55-prefixed digits.
  * Never requires the client to send "+55".
  */
+export const OWNER_PHONE_MSG =
+  'Informe um celular brasileiro com DDD (11 dígitos, nono dígito 9).';
 export function parseBrMobileE164(
   input: string | undefined | null,
 ): string | null {

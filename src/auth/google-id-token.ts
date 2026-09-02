@@ -34,10 +34,17 @@ export async function verifyGoogleIdToken(
     throw new UnauthorizedException('Token Google inválido.');
   }
 
-  const url = `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(token)}`;
+  const url = 'https://oauth2.googleapis.com/tokeninfo';
   let res: Response;
   try {
-    res = await fetch(url, { headers: { Accept: 'application/json' } });
+    res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({ id_token: token }).toString(),
+    });
   } catch {
     throw new UnauthorizedException('Token Google inválido.');
   }
@@ -48,18 +55,26 @@ export async function verifyGoogleIdToken(
 
   const data = (await res.json()) as {
     aud?: string;
+    iss?: string;
     sub?: string;
     email?: string;
     email_verified?: string | boolean;
     name?: string;
   };
 
-  if (data.aud !== audience || !data.sub || !data.email) {
+  const issuerOk =
+    data.iss === 'accounts.google.com' ||
+    data.iss === 'https://accounts.google.com';
+
+  if (data.aud !== audience || !issuerOk || !data.sub || !data.email) {
     throw new UnauthorizedException('Token Google inválido.');
   }
 
   const emailVerified =
     data.email_verified === true || data.email_verified === 'true';
+  if (!emailVerified) {
+    throw new UnauthorizedException('Email Google não verificado.');
+  }
 
   return {
     sub: data.sub,

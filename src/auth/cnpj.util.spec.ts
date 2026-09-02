@@ -70,4 +70,20 @@ describe('assertActiveCnpj', () => {
       /ativo na Receita/i,
     );
   });
+
+  it('rejects INATIVA (does not treat it as ATIVA via substring)', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ descricao_situacao_cadastral: 'INATIVA' }),
+    }) as unknown as typeof fetch;
+
+    await expect(getCnpjStatus(ACTIVE_CNPJ)).resolves.toEqual({
+      ok: true,
+      active: false,
+    });
+    await expect(assertActiveCnpj(ACTIVE_CNPJ)).rejects.toThrow(
+      /ativo na Receita/i,
+    );
+  });
 });

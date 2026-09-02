@@ -35,11 +35,7 @@ function isActiveSituation(data: BrasilApiCnpj): boolean {
     .replace(/[\u0300-\u036f]/g, '')
     .toUpperCase();
 
-  return (
-    situation.includes('ATIVA') ||
-    situation === '2' ||
-    situation === 'ATIVA'
-  );
+  return situation === 'ATIVA' || situation === '2';
 }
 
 async function fetchBrasilApiCnpj(
