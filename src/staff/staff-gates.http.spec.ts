@@ -1,4 +1,4 @@
-import { INestApplication } from '@nestjs/common';
+import { INestApplication, NotFoundException } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
@@ -342,6 +342,20 @@ describe('staff gates (http)', () => {
       .expect(400);
 
     expect(staff.listCustomersForStore).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 when staff lists customers of a missing store', async () => {
+    staff.listCustomersForStore.mockRejectedValueOnce(
+      new NotFoundException('Loja não encontrada.'),
+    );
+
+    await request(app.getHttpServer())
+      .get('/staff/stores/missing/customers')
+      .set(
+        'Authorization',
+        `Bearer ${jwt('staff', '99999999-9999-9999-9999-999999999999')}`,
+      )
+      .expect(404);
   });
 
   it('lets staff create a campaign for another tenant', async () => {

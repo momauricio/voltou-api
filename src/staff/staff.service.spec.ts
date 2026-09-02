@@ -68,8 +68,7 @@ describe('StaffService', () => {
 
   it('lists customers of one store with lastContactedAt and does not query other stores', async () => {
     const contactedAt = new Date('2026-08-20T15:00:00Z');
-    prisma.store.findUnique.mockResolvedValue({ id: 's1' });
-    prisma.customer.findMany.mockResolvedValue([
+    const allCustomers = [
       {
         id: 'c1',
         tenantId: 't1',
@@ -84,7 +83,33 @@ describe('StaffService', () => {
         tenant: { id: 't1', name: 'Tenant A' },
         store: { id: 's1', name: 'Loja A', slug: 'principal' },
       },
-    ]);
+      {
+        id: 'c2',
+        tenantId: 't2',
+        storeId: 's2',
+        displayName: 'Bruno',
+        phoneMasked: '+55 ****-0002',
+        phoneEnc: encryptPhone('+5511999990002'),
+        phoneHash: 'hash-bruno',
+        optedOutAt: null,
+        createdAt: new Date(),
+        customerEvents: [],
+        tenant: { id: 't2', name: 'Tenant B' },
+        store: { id: 's2', name: 'Loja B', slug: 'principal' },
+      },
+    ];
+    prisma.store.findUnique.mockImplementation(
+      ({ where }: { where: { id: string } }) =>
+        Promise.resolve(
+          where.id === 's1' || where.id === 's2' ? { id: where.id } : null,
+        ),
+    );
+    prisma.customer.findMany.mockImplementation(
+      ({ where }: { where: { storeId?: string } }) =>
+        Promise.resolve(
+          allCustomers.filter((c) => c.storeId === where.storeId),
+        ),
+    );
 
     const customers = await service.listCustomersForStore('s1');
 
@@ -95,13 +120,18 @@ describe('StaffService', () => {
     const listedWhere = findManyWhere();
     expect(listedWhere.storeId).toBe('s1');
     expect(customers).toHaveLength(1);
-    expect(customers[0].id).toBe('c1');
+    expect(customers.map((c) => c.id)).toEqual(['c1']);
     expect(customers[0].lastContactedAt).toEqual(contactedAt);
     expect(customers[0].tenant.name).toBe('Tenant A');
     expect(customers[0].store.name).toBe('Loja A');
     expect(customers[0].phoneE164).toBe('+5511999990001');
     expect(customers[0]).not.toHaveProperty('phoneEnc');
     expect(customers[0]).not.toHaveProperty('phoneHash');
+
+    const otherStore = await service.listCustomersForStore('s2');
+    expect(otherStore).toHaveLength(1);
+    expect(otherStore[0].id).toBe('c2');
+    expect(otherStore[0].phoneE164).toBe('+5511999990002');
   });
 
   it('returns 404 when listing customers of a missing store', async () => {
