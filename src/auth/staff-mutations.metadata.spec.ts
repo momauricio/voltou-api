@@ -34,6 +34,12 @@ describe('staff-only mutation metadata', () => {
     expect(rolesOf(CheckoutController.prototype, 'create')).toBeUndefined();
   });
 
+  it('requires staff for POST /checkouts/:id/mark-paid', () => {
+    expect(rolesOf(CheckoutController.prototype, 'markPaid')).toEqual([
+      USER_ROLES.STAFF,
+    ]);
+  });
+
   it('marks staff list/contact routes as staff-only', () => {
     const classRoles = Reflect.getMetadata(ROLES_KEY, StaffController);
     expect(classRoles).toEqual([USER_ROLES.STAFF]);

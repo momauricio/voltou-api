@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  ForbiddenException,
   Get,
   Param,
   Post,
@@ -9,6 +10,8 @@ import {
 import { CheckoutService } from './checkout.service';
 import { createCheckoutSchema } from '../shared/schemas';
 import { Public } from '../auth/public.decorator';
+import { Roles } from '../auth/roles.decorator';
+import { USER_ROLES } from '../auth/roles';
 
 @Controller('checkouts')
 export class CheckoutController {
@@ -37,11 +40,12 @@ export class CheckoutController {
     return this.checkoutService.create(parsed.data);
   }
 
+  /** Locked: only Mercado Pago webhook may call CheckoutService.markPaid. */
+  @Roles(USER_ROLES.STAFF)
   @Post(':id/mark-paid')
-  markPaid(
-    @Param('id') id: string,
-    @Body() body: { tenantId?: string },
-  ) {
-    return this.checkoutService.markPaid(id, body?.tenantId);
+  markPaid() {
+    throw new ForbiddenException(
+      'Pagamento só pode ser confirmado pelo Mercado Pago.',
+    );
   }
 }

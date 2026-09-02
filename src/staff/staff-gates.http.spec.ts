@@ -358,6 +358,54 @@ describe('staff gates (http)', () => {
       .expect(404);
   });
 
+  it('returns 401 on POST /checkouts/:id/mark-paid without a token', async () => {
+    await request(app.getHttpServer())
+      .post('/checkouts/chk-1/mark-paid')
+      .send({})
+      .expect(401);
+
+    expect(checkouts.markPaid).not.toHaveBeenCalled();
+  });
+
+  it('forbids owner JWT from POST /checkouts/:id/mark-paid even with its own tenantId', async () => {
+    const ownerTenant = '11111111-1111-1111-1111-111111111111';
+    await request(app.getHttpServer())
+      .post('/checkouts/chk-1/mark-paid')
+      .set('Authorization', `Bearer ${jwt('owner', ownerTenant)}`)
+      .send({ tenantId: ownerTenant })
+      .expect(403);
+
+    await request(app.getHttpServer())
+      .post('/checkouts/chk-1/mark-paid')
+      .set('Authorization', `Bearer ${jwt('owner', ownerTenant)}`)
+      .send({})
+      .expect(403);
+
+    expect(checkouts.markPaid).not.toHaveBeenCalled();
+  });
+
+  it('does not let staff mark a checkout paid over HTTP without Mercado Pago proof', async () => {
+    await request(app.getHttpServer())
+      .post('/checkouts/chk-1/mark-paid')
+      .set(
+        'Authorization',
+        `Bearer ${jwt('staff', '99999999-9999-9999-9999-999999999999')}`,
+      )
+      .send({})
+      .expect(403);
+
+    await request(app.getHttpServer())
+      .post('/checkouts/chk-1/mark-paid')
+      .set(
+        'Authorization',
+        `Bearer ${jwt('staff', '99999999-9999-9999-9999-999999999999')}`,
+      )
+      .send({ tenantId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' })
+      .expect(403);
+
+    expect(checkouts.markPaid).not.toHaveBeenCalled();
+  });
+
   it('lets staff create a campaign for another tenant', async () => {
     const targetTenant = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
     const targetStore = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
