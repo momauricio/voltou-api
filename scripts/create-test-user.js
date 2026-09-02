@@ -62,16 +62,24 @@ async function main() {
     return;
   }
 
-  const slug = slugify(STORE_NAME) || 'loja-mauricio';
+  const baseSlug = slugify(STORE_NAME) || 'loja-mauricio';
+  let slug = baseSlug;
+  let i = 1;
+  while (
+    (await prisma.tenant.findUnique({ where: { slug } })) ||
+    (await prisma.store.findUnique({ where: { slug } }))
+  ) {
+    slug = `${baseSlug}-${i++}`;
+  }
   const tenant = await prisma.tenant.create({
     data: {
       name: STORE_NAME,
-      slug: `${slug}-${Date.now().toString(36)}`,
+      slug,
       cnpj: CNPJ,
       stores: {
         create: {
           name: STORE_NAME,
-          slug: 'principal',
+          slug,
         },
       },
       users: {

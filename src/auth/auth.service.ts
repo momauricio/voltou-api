@@ -437,7 +437,10 @@ export class AuthService {
     const baseSlug = slugify(input.storeName) || `loja-${input.cnpj.slice(-4)}`;
     let slug = baseSlug;
     let i = 1;
-    while (await this.prisma.tenant.findUnique({ where: { slug } })) {
+    while (
+      (await this.prisma.tenant.findUnique({ where: { slug } })) ||
+      (await this.prisma.store.findUnique({ where: { slug } }))
+    ) {
       slug = `${baseSlug}-${i++}`;
     }
 
@@ -460,7 +463,7 @@ export class AuthService {
         stores: {
           create: {
             name: input.storeName,
-            slug: 'principal',
+            slug,
           },
         },
         users: {

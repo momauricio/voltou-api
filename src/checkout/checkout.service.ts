@@ -685,25 +685,16 @@ export class CheckoutService {
 
   private async findByStoreSlugAndCoupon(storeSlug: string, coupon: string) {
     const code = coupon.trim().toUpperCase();
-    const store = await this.prisma.store.findFirst({
-      where: { slug: storeSlug.trim().toLowerCase() },
+    const slug = storeSlug.trim().toLowerCase();
+    const store = await this.prisma.store.findUnique({
+      where: { slug },
     });
-    if (!store) {
-      // also try exact slug match (slugs may be mixed case)
-      const storeExact = await this.prisma.store.findFirst({
-        where: { slug: storeSlug.trim() },
-      });
-      if (!storeExact) throw new NotFoundException('Oferta não encontrada.');
-      const checkout = await this.prisma.checkout.findFirst({
-        where: { storeId: storeExact.id, couponCode: code },
-        include: { customer: true, store: true, product: true },
-      });
-      if (!checkout) throw new NotFoundException('Oferta não encontrada.');
-      return checkout;
-    }
+    if (!store) throw new NotFoundException('Oferta não encontrada.');
 
-    const checkout = await this.prisma.checkout.findFirst({
-      where: { storeId: store.id, couponCode: code },
+    const checkout = await this.prisma.checkout.findUnique({
+      where: {
+        storeId_couponCode: { storeId: store.id, couponCode: code },
+      },
       include: { customer: true, store: true, product: true },
     });
     if (!checkout) throw new NotFoundException('Oferta não encontrada.');
