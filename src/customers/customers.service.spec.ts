@@ -33,6 +33,7 @@ describe('CustomersService lastContactedAt', () => {
 
     expect(prisma.customer.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
+        omit: { phoneEnc: true, phoneHash: true },
         include: expect.objectContaining({
           customerEvents: expect.objectContaining({
             where: { type: 'contacted' },
@@ -66,6 +67,12 @@ describe('CustomersService lastContactedAt', () => {
 
     const detail = await service.getDetail('tenant-1', 'c1');
 
+    expect(prisma.customer.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'c1', tenantId: 'tenant-1' },
+        omit: { phoneEnc: true, phoneHash: true },
+      }),
+    );
     expect(prisma.customerEvent.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {

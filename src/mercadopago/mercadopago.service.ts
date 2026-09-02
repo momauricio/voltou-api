@@ -263,7 +263,8 @@ export class MercadoPagoService implements PaymentProvider {
 
   /**
    * Webhook: MP envia topic=payment&id=... ou body com data.id.
-   * Sempre grava WebhookLog; retorna checkoutId quando payment approved.
+   * MP_WEBHOOK_SECRET is required — missing/blank refuses before processing.
+   * Valid requests are logged; returns checkoutId when payment is approved.
    */
   async handleWebhook(
     query: Record<string, string>,
