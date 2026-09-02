@@ -21,6 +21,32 @@ export type MpPreferenceResponse = {
   sandbox_init_point?: string;
 };
 
+export type MpCreatePaymentInput = {
+  amountCents: number;
+  description: string;
+  paymentMethodId: string;
+  payerEmail: string;
+  externalReference: string;
+  notificationUrl: string;
+  /** Voltou commission in cents — sent as MP application_fee (BRL). */
+  applicationFeeCents: number;
+  token?: string;
+  installments?: number;
+  issuerId?: string;
+  payerIdentification?: { type: string; number: string };
+  idempotencyKey: string;
+};
+
+export type TransparentPaymentResult = {
+  paymentId: number;
+  status: string;
+  statusDetail: string | null;
+  amountCents: number;
+  pixQrCode: string | null;
+  pixQrCodeBase64: string | null;
+  pixTicketUrl: string | null;
+};
+
 @Injectable()
 export class MercadoPagoClient {
   isConfigured(): boolean {
@@ -188,6 +214,91 @@ export class MercadoPagoClient {
           ? data.sandbox_init_point
           : data.init_point,
       sandbox_init_point: data.sandbox_init_point,
+    };
+  }
+
+  /**
+   * Checkout Transparente: POST /v1/payments.
+   * Always sends application_fee (Voltou commission). Never sends collector_id.
+   */
+  async createPayment(
+    accessToken: string,
+    input: MpCreatePaymentInput,
+  ): Promise<TransparentPaymentResult> {
+    const method = input.paymentMethodId.trim().toLowerCase();
+    const payer: Record<string, unknown> = { email: input.payerEmail.trim() };
+    if (input.payerIdentification?.type && input.payerIdentification.number) {
+      payer.identification = {
+        type: input.payerIdentification.type,
+        number: input.payerIdentification.number,
+      };
+    }
+
+    const body: Record<string, unknown> = {
+      transaction_amount: Number((input.amountCents / 100).toFixed(2)),
+      description: input.description.slice(0, 256),
+      payment_method_id: method,
+      payer,
+      external_reference: input.externalReference,
+      notification_url: input.notificationUrl,
+      application_fee: Number((input.applicationFeeCents / 100).toFixed(2)),
+    };
+
+    if (method !== 'pix' && input.token) {
+      body.token = input.token;
+      body.installments =
+        input.installments && input.installments > 0 ? input.installments : 1;
+      if (input.issuerId) {
+        body.issuer_id = input.issuerId;
+      }
+    }
+
+    const res = await fetch(`${API_BASE}/v1/payments`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        'X-Idempotency-Key': input.idempotencyKey,
+      },
+      body: JSON.stringify(body),
+    });
+
+    const data = (await res.json().catch(() => ({}))) as {
+      id?: number | string;
+      status?: string;
+      status_detail?: string;
+      point_of_interaction?: {
+        transaction_data?: {
+          qr_code?: string;
+          qr_code_base64?: string;
+          ticket_url?: string;
+        };
+      };
+      message?: string;
+      error?: string;
+      cause?: { description?: string }[];
+    };
+
+    if (!res.ok || data.id == null) {
+      const cause = data.cause?.find((c) => c.description)?.description;
+      throw new Error(
+        cause ||
+          data.message ||
+          data.error ||
+          `Falha ao criar pagamento MP (HTTP ${res.status})`,
+      );
+    }
+
+    const td = data.point_of_interaction?.transaction_data;
+    return {
+      paymentId: Number(data.id),
+      status: String(data.status ?? ''),
+      statusDetail: data.status_detail ?? null,
+      amountCents: input.amountCents,
+      pixQrCode: td?.qr_code ?? null,
+      pixQrCodeBase64: td?.qr_code_base64 ?? null,
+      pixTicketUrl: td?.ticket_url ?? null,
     };
   }
 

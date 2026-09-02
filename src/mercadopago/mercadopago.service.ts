@@ -17,7 +17,9 @@ import {
 import {
   CreatePaymentLinkInput,
   CreatePaymentLinkResult,
+  CreateTransparentPaymentInput,
   PaymentProvider,
+  TransparentPaymentResult,
 } from '../checkout/payment-provider';
 import { MercadoPagoClient, type MpTokenResponse } from './mercadopago.client';
 
@@ -51,6 +53,16 @@ export class MercadoPagoService implements PaymentProvider {
       where: { tenantId_storeId: { tenantId, storeId } },
     });
     return Boolean(row && row.status === 'connected');
+  }
+
+  /**
+   * Public key for Payment Brick. Integrator/marketplace MP_PUBLIC_KEY
+   * wins over a seller key when both are present.
+   */
+  getSellerPublicKey(sellerPublicKey?: string | null): string | null {
+    const integrator = process.env.MP_PUBLIC_KEY?.trim();
+    if (integrator) return integrator;
+    return sellerPublicKey?.trim() || null;
   }
 
   async getAuthorizeUrl(tenantId: string, storeId: string) {
@@ -259,6 +271,56 @@ export class MercadoPagoService implements PaymentProvider {
       initPoint: preference.init_point,
       providerRef: preference.id,
     };
+  }
+
+  /**
+   * Checkout Transparente: POST /v1/payments with seller OAuth token
+   * and application_fee = Voltou commission. No collector_id.
+   */
+  async createTransparentPayment(
+    input: CreateTransparentPaymentInput,
+  ): Promise<TransparentPaymentResult> {
+    const apiUrl =
+      process.env.API_PUBLIC_URL ??
+      process.env.WEB_URL?.replace(':3000', ':3001') ??
+      'http://localhost:3001';
+
+    try {
+      const accessToken = await this.getValidAccessToken(
+        input.tenantId,
+        input.storeId,
+      );
+      return await this.mp.createPayment(accessToken, {
+        amountCents: input.amountCents,
+        description: input.title,
+        paymentMethodId: input.paymentMethodId,
+        payerEmail: input.payerEmail,
+        externalReference: input.checkoutId,
+        notificationUrl: `${apiUrl}/mercadopago/webhook`,
+        applicationFeeCents: input.commissionCents,
+        token: input.token,
+        installments: input.installments,
+        issuerId: input.issuerId,
+        payerIdentification: input.payerIdentification,
+        idempotencyKey:
+          `${input.checkoutId}:${input.paymentMethodId.trim().toLowerCase()}:${input.amountCents}:${input.token?.trim() || 'no-token'}`.slice(
+            0,
+            255,
+          ),
+      });
+    } catch (err) {
+      if (err instanceof BadRequestException) throw err;
+      if (err instanceof UnauthorizedException) {
+        throw new BadRequestException(
+          'Pagamento indisponível. A loja precisa conectar o Mercado Pago.',
+        );
+      }
+      throw new BadRequestException(
+        err instanceof Error
+          ? err.message
+          : 'Não foi possível criar o pagamento no Mercado Pago.',
+      );
+    }
   }
 
   /**

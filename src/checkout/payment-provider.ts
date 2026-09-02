@@ -21,6 +21,31 @@ export type CreatePaymentLinkResult = {
   providerRef: string;
 };
 
+export type CreateTransparentPaymentInput = {
+  tenantId: string;
+  storeId: string;
+  checkoutId: string;
+  amountCents: number;
+  commissionCents: number;
+  title: string;
+  paymentMethodId: string;
+  payerEmail: string;
+  token?: string;
+  installments?: number;
+  issuerId?: string;
+  payerIdentification?: { type: string; number: string };
+};
+
+export type TransparentPaymentResult = {
+  paymentId: number;
+  status: string;
+  statusDetail: string | null;
+  amountCents: number;
+  pixQrCode: string | null;
+  pixQrCodeBase64: string | null;
+  pixTicketUrl: string | null;
+};
+
 /**
  * Adapter de PSP. Mercado Pago é o MVP; InfinitePay e outros
  * implementam a mesma interface depois.
@@ -30,9 +55,16 @@ export interface PaymentProvider {
 
   isConnected(tenantId: string, storeId: string): Promise<boolean>;
 
+  /** Integrator MP_PUBLIC_KEY wins over a seller key. */
+  getSellerPublicKey(sellerPublicKey?: string | null): string | null;
+
   createPaymentLink(
     input: CreatePaymentLinkInput,
   ): Promise<CreatePaymentLinkResult>;
+
+  createTransparentPayment(
+    input: CreateTransparentPaymentInput,
+  ): Promise<TransparentPaymentResult>;
 }
 
 export const PAYMENT_PROVIDER = Symbol('PAYMENT_PROVIDER');

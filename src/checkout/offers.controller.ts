@@ -9,6 +9,7 @@ import {
 import { Throttle } from '@nestjs/throttler';
 import { Public } from '../auth/public.decorator';
 import { publicPayThrottle } from '../security/rate-limits';
+import { createTransparentOfferPaymentSchema } from '../shared/schemas';
 import { CheckoutService } from './checkout.service';
 
 @Controller('offers')
@@ -45,6 +46,30 @@ export class OffersController {
       storeSlug,
       coupon,
       selectedAddonIds,
+    );
+  }
+
+  @Public()
+  @Throttle(publicPayThrottle)
+  @Post('public/:storeSlug/:coupon/payments')
+  createPayment(
+    @Param('storeSlug') storeSlug: string,
+    @Param('coupon') coupon: string,
+    @Body() body: unknown,
+  ) {
+    if (!storeSlug?.trim() || !coupon?.trim()) {
+      throw new BadRequestException('slug e cupom são obrigatórios.');
+    }
+    const parsed = createTransparentOfferPaymentSchema.safeParse(body ?? {});
+    if (!parsed.success) {
+      throw new BadRequestException(
+        parsed.error.issues.map((i) => i.message).join(', '),
+      );
+    }
+    return this.checkoutService.createPublicPayment(
+      storeSlug,
+      coupon,
+      parsed.data,
     );
   }
 
