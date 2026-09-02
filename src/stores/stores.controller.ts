@@ -53,6 +53,19 @@ const hexColor = z
   .nullable()
   .optional();
 
+const updateFulfillmentSchema = z.object({
+  tenantId: z.string().uuid(),
+  storeId: z.string().uuid(),
+  deliveryEnabled: z.boolean().optional(),
+  shippingCents: z.number().int().nonnegative().max(1_000_000).optional(),
+  pickupAddressText: z
+    .union([z.string(), z.null()])
+    .optional(),
+  orderNotifyPhoneE164: z
+    .union([z.string(), z.null()])
+    .optional(),
+});
+
 const updateBrandingSchema = z.object({
   tenantId: z.string().uuid(),
   storeId: z.string().uuid(),
@@ -158,5 +171,30 @@ export class StoresController {
         branding.fontFamily === undefined ? undefined : branding.fontFamily,
       message: branding.message === undefined ? undefined : branding.message,
     });
+  }
+
+  @Get('fulfillment')
+  getFulfillment(
+    @Query('tenantId') tenantId?: string,
+    @Query('storeId') storeId?: string,
+  ) {
+    const parsed = tenantStoreQuery.safeParse({ tenantId, storeId });
+    if (!parsed.success) {
+      throw new BadRequestException('tenantId e storeId são obrigatórios.');
+    }
+    return this.storesService.getFulfillment(
+      parsed.data.tenantId,
+      parsed.data.storeId,
+    );
+  }
+
+  @Patch('fulfillment')
+  updateFulfillment(@Body() body: unknown) {
+    const parsed = updateFulfillmentSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new BadRequestException(parsed.error.flatten());
+    }
+    const { tenantId, storeId, ...fulfillment } = parsed.data;
+    return this.storesService.updateFulfillment(tenantId, storeId, fulfillment);
   }
 }
