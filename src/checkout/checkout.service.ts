@@ -5,6 +5,7 @@ import {
   NotFoundException,
   Optional,
   Inject,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateCheckoutInput } from '../shared/schemas';
@@ -60,7 +61,13 @@ export class CheckoutService {
     };
   }
 
-  async create(input: CreateCheckoutInput) {
+  async create(
+    input: CreateCheckoutInput,
+    actor: { staffUserId: string },
+  ) {
+    if (!actor?.staffUserId?.trim()) {
+      throw new UnauthorizedException('Sessão inválida.');
+    }
     const customer = await this.prisma.customer.findFirst({
       where: {
         id: input.customerId,
@@ -214,6 +221,7 @@ export class CheckoutService {
         commissionCents,
         interestId: input.interestId,
         createdBy: input.createdBy,
+        staffUserId: actor.staffUserId,
         provider: 'stub',
         externalId: token,
         paymentUrl,

@@ -11,7 +11,7 @@ try {
 }
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, { rawBody: true });
 
   const corsOrigins = (
     process.env.CORS_ORIGINS ??

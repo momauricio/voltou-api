@@ -67,12 +67,19 @@ export class CustomersService {
         },
       },
       orderBy: { createdAt: 'desc' },
+      omit: { phoneEnc: true, phoneHash: true },
     });
 
-    return rows.map(({ customerEvents, ...customer }) => ({
-      ...customer,
-      lastContactedAt: customerEvents[0]?.occurredAt ?? null,
-    }));
+    return rows.map(({ customerEvents, ...customer }) => {
+      const { phoneEnc: _e, phoneHash: _h, ...safe } = customer as typeof customer & {
+        phoneEnc?: string;
+        phoneHash?: string;
+      };
+      return {
+        ...safe,
+        lastContactedAt: customerEvents[0]?.occurredAt ?? null,
+      };
+    });
   }
 
   async getDetail(tenantId: string, customerId: string) {
@@ -99,6 +106,7 @@ export class CustomersService {
           take: 20,
         },
       },
+      omit: { phoneEnc: true, phoneHash: true },
     });
     if (!customer) throw new NotFoundException('Cliente não encontrado.');
     const lastContact = await this.prisma.customerEvent.findFirst({
@@ -110,8 +118,12 @@ export class CustomersService {
       orderBy: { occurredAt: 'desc' },
       select: { occurredAt: true },
     });
+    const { phoneEnc: _e, phoneHash: _h, ...safe } = customer as typeof customer & {
+      phoneEnc?: string;
+      phoneHash?: string;
+    };
     return {
-      ...customer,
+      ...safe,
       lastContactedAt: lastContact?.occurredAt ?? null,
     };
   }

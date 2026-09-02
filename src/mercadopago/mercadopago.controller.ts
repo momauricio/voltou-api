@@ -5,11 +5,14 @@ import {
   Delete,
   Get,
   Headers,
+  HttpException,
+  HttpStatus,
   Inject,
   Post,
   Query,
   forwardRef,
 } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import { Public } from '../auth/public.decorator';
 import { z } from 'zod';
 import { MercadoPagoService } from './mercadopago.service';
@@ -94,8 +97,9 @@ export class MercadoPagoController {
     );
   }
 
-  /** Always HTTP 200 so Mercado Pago keeps delivering. */
+  /** Invalid/missing signature is 401. Other errors stay 200 so MP retries later. */
   @Public()
+  @SkipThrottle()
   @Post('webhook')
   @Get('webhook')
   async webhook(
@@ -119,6 +123,15 @@ export class MercadoPagoController {
       }
       return { ok: true, ...result };
     } catch (err) {
+      if (err instanceof HttpException) {
+        const status = err.getStatus();
+        if (
+          status === HttpStatus.UNAUTHORIZED ||
+          status === HttpStatus.FORBIDDEN
+        ) {
+          throw err;
+        }
+      }
       return {
         ok: true,
         ignored: true,

@@ -17,6 +17,9 @@ describe('CustomersService lastContactedAt', () => {
       {
         id: 'c1',
         displayName: 'Ana',
+        phoneMasked: '(11) *****-0001',
+        phoneEnc: 'enc-should-not-leak',
+        phoneHash: 'hash-should-not-leak',
         customerEvents: [{ occurredAt }],
         customerInterests: [],
         sales: [],
@@ -38,6 +41,9 @@ describe('CustomersService lastContactedAt', () => {
       }),
     );
     expect(rows[0].lastContactedAt).toEqual(occurredAt);
+    expect(rows[0].phoneMasked).toBe('(11) *****-0001');
+    expect(rows[0]).not.toHaveProperty('phoneEnc');
+    expect(rows[0]).not.toHaveProperty('phoneHash');
     expect(
       (rows[0] as { customerEvents?: unknown }).customerEvents,
     ).toBeUndefined();
@@ -48,6 +54,9 @@ describe('CustomersService lastContactedAt', () => {
     prisma.customer.findFirst.mockResolvedValue({
       id: 'c1',
       displayName: 'Ana',
+      phoneMasked: '(11) *****-0001',
+      phoneEnc: 'enc-should-not-leak',
+      phoneHash: 'hash-should-not-leak',
       customerEvents: Array.from({ length: 50 }, (_, i) => ({
         type: 'note',
         occurredAt: new Date(`2026-08-${String((i % 28) + 1).padStart(2, '0')}T00:00:00Z`),
@@ -67,6 +76,9 @@ describe('CustomersService lastContactedAt', () => {
       }),
     );
     expect(detail.lastContactedAt).toEqual(contactedAt);
+    expect(detail.phoneMasked).toBe('(11) *****-0001');
+    expect(detail).not.toHaveProperty('phoneEnc');
+    expect(detail).not.toHaveProperty('phoneHash');
   });
 
   it('returns null lastContactedAt when staff has not contacted the customer', async () => {

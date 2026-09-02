@@ -69,13 +69,21 @@ export class StaffController {
   }
 
   @Post('checkouts')
-  createCheckout(@Body() body: unknown) {
+  createCheckout(
+    @Body() body: unknown,
+    @CurrentUser() user?: AccessTokenUser,
+  ) {
+    if (!user?.sub) {
+      throw new UnauthorizedException('Sessão inválida.');
+    }
     const parsed = createCheckoutSchema.safeParse(body);
     if (!parsed.success) {
       throw new BadRequestException(
         parsed.error.issues.map((i) => i.message).join(', '),
       );
     }
-    return this.checkoutService.create(parsed.data);
+    return this.checkoutService.create(parsed.data, {
+      staffUserId: user.sub,
+    });
   }
 }

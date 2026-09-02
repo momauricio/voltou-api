@@ -98,7 +98,11 @@ export class WahaClient {
   createSession(
     name: string,
     config?: {
-      webhooks?: Array<{ url: string; events: string[] }>;
+      webhooks?: Array<{
+        url: string;
+        events: string[];
+        hmac?: { key: string };
+      }>;
     },
   ): Promise<WahaSession> {
     return this.request<WahaSession>('/api/sessions', {
@@ -114,7 +118,11 @@ export class WahaClient {
   updateSession(
     name: string,
     config: {
-      webhooks?: Array<{ url: string; events: string[] }>;
+      webhooks?: Array<{
+        url: string;
+        events: string[];
+        hmac?: { key: string };
+      }>;
     },
   ): Promise<WahaSession> {
     return this.request<WahaSession>(`/api/sessions/${encodeURIComponent(name)}`, {

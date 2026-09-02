@@ -1,4 +1,4 @@
-import { INestApplication } from '@nestjs/common';
+import { INestApplication, UnauthorizedException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { CheckoutService } from '../checkout/checkout.service';
@@ -52,6 +52,19 @@ describe('MercadoPago webhook (http)', () => {
     expect(checkoutService.markPaid).toHaveBeenCalledWith('chk-1', undefined, {
       mpPaymentId: 'pay-99',
     });
+  });
+
+  it('returns 401 and does not mark paid when the webhook signature is refused', async () => {
+    mpService.handleWebhook.mockRejectedValue(
+      new UnauthorizedException('Webhook Mercado Pago sem segredo configurado.'),
+    );
+
+    await request(app.getHttpServer())
+      .post('/mercadopago/webhook')
+      .send({ type: 'payment', data: { id: 'pay-99' } })
+      .expect(401);
+
+    expect(checkoutService.markPaid).not.toHaveBeenCalled();
   });
 
   it('does not call markPaid when webhook ignores a non-approved payment', async () => {
