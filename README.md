@@ -20,6 +20,8 @@ Todas as entidades de negócio carregam `tenantId` (e em geral `storeId`). Consu
 
 ```bash
 cp .env.example .env
+# AUTH_SECRET is required. The old default voltou-dev-secret-change-me is refused.
+# openssl rand -base64 48
 npm install
 npx prisma generate
 npm run start:dev
