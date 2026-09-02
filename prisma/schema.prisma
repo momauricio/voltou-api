@@ -39,7 +39,8 @@ model Store {
   id        String   @id @default(uuid())
   tenantId  String
   name      String
-  slug      String
+  /// Globally unique public path segment for /loja/:storeSlug/:coupon
+  slug      String   @unique
   timezone  String   @default("America/Sao_Paulo")
   /// mercadopago | infinitepay (futuro) | stub
   preferredCheckoutProvider String @default("mercadopago")

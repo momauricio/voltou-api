@@ -51,6 +51,7 @@ function makePrisma() {
             slug: string;
             cnpj: string;
             users: { create: Record<string, unknown> };
+            stores: { create: { name: string; slug: string } };
           };
         }) => ({
           id: 'tenant-1',
@@ -65,9 +66,12 @@ function makePrisma() {
               ...data.users.create,
             },
           ],
-          stores: [{ id: 'store-1', name: data.name }],
+          stores: [{ id: 'store-1', name: data.name, slug: data.stores.create.slug }],
         }),
       ),
+    },
+    store: {
+      findUnique: jest.fn().mockResolvedValue(null),
     },
   };
 }
@@ -143,6 +147,60 @@ describe('AuthService.register (lojista)', () => {
     expect(created.users.create.passwordHash).toEqual(expect.any(String));
     expect(created.users.create.googleSub).toBeUndefined();
     expect(created.users.create.ownerPhoneE164).toBe('+5511987654321');
+  });
+
+  it('assigns slugify(storeName) to the store, not hardcoded principal', async () => {
+    const prisma = makePrisma();
+    const service = new AuthService(prisma as never, email as never);
+    await service.register(registerInput);
+    const created = prisma.tenant.create.mock.calls[0][0].data as {
+      stores: { create: { slug: string } };
+    };
+    expect(created.stores.create.slug).toBe('loja-da-maria');
+    expect(created.stores.create.slug).not.toBe('principal');
+  });
+
+  it('does not give two tenants store slug principal', async () => {
+    const prisma = makePrisma();
+    const service = new AuthService(prisma as never, email as never);
+    await service.register(registerInput);
+    await service.register({
+      ...registerInput,
+      email: 'joao@loja.test',
+      ownerPhoneE164: '+5511911111111',
+      storeName: 'Loja do Joao',
+      cnpj: '99888777000166',
+    });
+    const slugOf = (call: number) =>
+      (
+        prisma.tenant.create.mock.calls[call][0].data as {
+          stores: { create: { slug: string } };
+        }
+      ).stores.create.slug;
+    expect(slugOf(0)).toBe('loja-da-maria');
+    expect(slugOf(1)).toBe('loja-do-joao');
+    expect(slugOf(0)).not.toBe('principal');
+    expect(slugOf(1)).not.toBe('principal');
+    expect(slugOf(0)).not.toBe(slugOf(1));
+  });
+
+  it('suffixes store slug when slugify(storeName) is already taken (including principal)', async () => {
+    const prisma = makePrisma();
+    prisma.store.findUnique.mockImplementation(
+      async ({ where }: { where: { slug?: string } }) => {
+        if (where.slug === 'principal') return { id: 'live-loja-teste' };
+        return null;
+      },
+    );
+    const service = new AuthService(prisma as never, email as never);
+    await service.register({
+      ...registerInput,
+      storeName: 'Principal',
+    });
+    const created = prisma.tenant.create.mock.calls[0][0].data as {
+      stores: { create: { slug: string } };
+    };
+    expect(created.stores.create.slug).toBe('principal-1');
   });
 
   it('rejects duplicate email (email path unchanged)', async () => {
