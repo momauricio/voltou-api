@@ -1,4 +1,4 @@
-import { INestApplication } from '@nestjs/common';
+import { INestApplication, NotFoundException } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
@@ -12,7 +12,10 @@ import { CheckoutService } from '../checkout/checkout.service';
 import { StaffController } from './staff.controller';
 import { StaffService } from './staff.service';
 
-function jwt(role: 'owner' | 'staff', tenantId = '11111111-1111-1111-1111-111111111111') {
+function jwt(
+  role: 'owner' | 'staff',
+  tenantId = '11111111-1111-1111-1111-111111111111',
+) {
   return signAccessToken({
     sub: `user-${role}`,
     tenantId,
@@ -39,8 +42,10 @@ describe('staff gates (http)', () => {
     markPaid: jest.fn(),
   };
   const staff = {
-    listStores: jest.fn().mockResolvedValue([{ id: 's1' }]),
-    listCustomers: jest.fn().mockResolvedValue([{ id: 'c1', lastContactedAt: null }]),
+    listStores: jest.fn().mockResolvedValue([{ id: 's1', customerCount: 1 }]),
+    listCustomersForStore: jest
+      .fn()
+      .mockResolvedValue([{ id: 'c1', lastContactedAt: null }]),
     registerContact: jest.fn().mockResolvedValue({
       id: 'evt-1',
       type: 'contacted',
@@ -226,14 +231,40 @@ describe('staff gates (http)', () => {
     expect(checkouts.create).not.toHaveBeenCalled();
   });
 
-  it('forbids owner from staff list/contact routes', async () => {
+  it('returns 401 on staff routes without a token', async () => {
+    await request(app.getHttpServer()).get('/staff/stores').expect(401);
+    await request(app.getHttpServer())
+      .get('/staff/stores/s1/customers')
+      .expect(401);
+    await request(app.getHttpServer()).get('/staff/customers').expect(401);
+    await request(app.getHttpServer())
+      .post('/staff/customers/c1/contact')
+      .send({ channel: 'call' })
+      .expect(401);
+    await request(app.getHttpServer())
+      .post('/staff/checkouts')
+      .send({
+        tenantId: '11111111-1111-1111-1111-111111111111',
+        storeId: '22222222-2222-2222-2222-222222222222',
+        customerId: '33333333-3333-3333-3333-333333333333',
+        productId: '44444444-4444-4444-4444-444444444444',
+      })
+      .expect(401);
+  });
+
+  it('forbids owner JWT on /staff/*', async () => {
     const token = jwt('owner');
     await request(app.getHttpServer())
       .get('/staff/stores')
       .set('Authorization', `Bearer ${token}`)
       .expect(403);
     await request(app.getHttpServer())
+      .get('/staff/stores/s1/customers')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(403);
+    await request(app.getHttpServer())
       .get('/staff/customers')
+      .query({ storeId: 's1' })
       .set('Authorization', `Bearer ${token}`)
       .expect(403);
     await request(app.getHttpServer())
@@ -241,9 +272,19 @@ describe('staff gates (http)', () => {
       .set('Authorization', `Bearer ${token}`)
       .send({ channel: 'call' })
       .expect(403);
+    await request(app.getHttpServer())
+      .post('/staff/checkouts')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        tenantId: '11111111-1111-1111-1111-111111111111',
+        storeId: '22222222-2222-2222-2222-222222222222',
+        customerId: '33333333-3333-3333-3333-333333333333',
+        productId: '44444444-4444-4444-4444-444444444444',
+      })
+      .expect(403);
   });
 
-  it('lets staff list stores/customers and register contact', async () => {
+  it('lets staff list stores and customers of one store and register contact', async () => {
     const token = jwt('staff', '99999999-9999-9999-9999-999999999999');
 
     await request(app.getHttpServer())
@@ -252,9 +293,13 @@ describe('staff gates (http)', () => {
       .expect(200);
 
     await request(app.getHttpServer())
-      .get('/staff/customers')
+      .get('/staff/stores/s1/customers')
+      .query({ q: 'Ana' })
       .set('Authorization', `Bearer ${token}`)
       .expect(200);
+
+    expect(staff.listCustomersForStore).toHaveBeenCalledWith('s1', 'Ana');
+    expect(staff.listStores).toHaveBeenCalled();
 
     await request(app.getHttpServer())
       .post('/staff/customers/c1/contact')
@@ -274,6 +319,43 @@ describe('staff gates (http)', () => {
         occurredAt: '2026-08-31T10:00:00.000Z',
       }),
     );
+  });
+
+  it('lets staff list store customers via GET /staff/customers?storeId=', async () => {
+    const token = jwt('staff', '99999999-9999-9999-9999-999999999999');
+
+    await request(app.getHttpServer())
+      .get('/staff/customers')
+      .query({ storeId: 's2', q: 'Bruno' })
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+
+    expect(staff.listCustomersForStore).toHaveBeenCalledWith('s2', 'Bruno');
+  });
+
+  it('rejects staff GET /staff/customers without storeId so the list stays store-scoped', async () => {
+    const token = jwt('staff', '99999999-9999-9999-9999-999999999999');
+
+    await request(app.getHttpServer())
+      .get('/staff/customers')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(400);
+
+    expect(staff.listCustomersForStore).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 when staff lists customers of a missing store', async () => {
+    staff.listCustomersForStore.mockRejectedValueOnce(
+      new NotFoundException('Loja não encontrada.'),
+    );
+
+    await request(app.getHttpServer())
+      .get('/staff/stores/missing/customers')
+      .set(
+        'Authorization',
+        `Bearer ${jwt('staff', '99999999-9999-9999-9999-999999999999')}`,
+      )
+      .expect(404);
   });
 
   it('lets staff create a campaign for another tenant', async () => {
