@@ -1,4 +1,5 @@
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'crypto';
+import { getAuthSecret } from './auth-secret';
 
 const SCRYPT_KEYLEN = 64;
 
@@ -26,19 +27,23 @@ export function hashToken(token: string): string {
 }
 
 export function signAccessToken(payload: Record<string, unknown>): string {
-  const secret = process.env.AUTH_SECRET ?? 'voltou-dev-secret-change-me';
-  const body = Buffer.from(JSON.stringify({
-    ...payload,
-    exp: Date.now() + 1000 * 60 * 60 * 24 * 7,
-  })).toString('base64url');
-  const sig = createHash('sha256').update(`${body}.${secret}`).digest('base64url');
+  const secret = getAuthSecret();
+  const body = Buffer.from(
+    JSON.stringify({
+      ...payload,
+      exp: Date.now() + 1000 * 60 * 60 * 24 * 7,
+    }),
+  ).toString('base64url');
+  const sig = createHash('sha256')
+    .update(`${body}.${secret}`)
+    .digest('base64url');
   return `${body}.${sig}`;
 }
 
 export function verifyAccessToken(
   token: string,
 ): { sub: string; tenantId: string; email: string; role: string } | null {
-  const secret = process.env.AUTH_SECRET ?? 'voltou-dev-secret-change-me';
+  const secret = getAuthSecret();
   const [body, sig] = token.split('.');
   if (!body || !sig) return null;
   const expected = createHash('sha256')
