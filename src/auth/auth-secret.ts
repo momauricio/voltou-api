@@ -23,11 +23,8 @@ export function assertAuthSecret(raw = process.env.AUTH_SECRET): void {
   }
 }
 
-/** Read AUTH_SECRET after bootstrap assert. Throws if somehow missing. */
+/** Read AUTH_SECRET after bootstrap assert. Throws if missing or unsafe. */
 export function getAuthSecret(): string {
-  const secret = normalizeAuthSecret(process.env.AUTH_SECRET);
-  if (!secret) {
-    throw new Error(AUTH_SECRET_UNSAFE_MESSAGE);
-  }
-  return secret;
+  assertAuthSecret();
+  return normalizeAuthSecret(process.env.AUTH_SECRET);
 }

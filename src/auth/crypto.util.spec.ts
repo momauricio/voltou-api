@@ -23,6 +23,18 @@ describe('access token secret', () => {
     ).toThrow(/AUTH_SECRET/);
   });
 
+  it('does not sign with the public default AUTH_SECRET', () => {
+    process.env.AUTH_SECRET = 'voltou-dev-secret-change-me';
+    expect(() =>
+      signAccessToken({
+        sub: 'u1',
+        tenantId: 't1',
+        email: 'a@b.c',
+        role: 'owner',
+      }),
+    ).toThrow(/AUTH_SECRET/);
+  });
+
   it('signs and verifies with AUTH_SECRET after it is set', () => {
     process.env.AUTH_SECRET = 'unit-test-auth-secret-not-for-production';
     const token = signAccessToken({
