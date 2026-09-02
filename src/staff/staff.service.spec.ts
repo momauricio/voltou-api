@@ -1,21 +1,32 @@
 import { NotFoundException } from '@nestjs/common';
 import { StaffService } from './staff.service';
 import { CUSTOMER_EVENT_CONTACTED } from '../customers/customer-events';
-import { encryptPhone } from '../common/phone.util';
+import {
+  encryptPhone,
+  hashPhone,
+  normalizePhoneBr,
+} from '../common/phone.util';
 
 describe('StaffService', () => {
   const prisma = {
-    store: { findMany: jest.fn() },
+    store: { findMany: jest.fn(), findUnique: jest.fn() },
     customer: { findMany: jest.fn(), findUnique: jest.fn() },
     customerEvent: { create: jest.fn() },
   };
   const service = new StaffService(prisma as never);
 
+  function findManyWhere(): { storeId?: string; OR?: unknown[] } {
+    const calls = prisma.customer.findMany.mock.calls as unknown as Array<
+      [{ where?: { storeId?: string; OR?: unknown[] } }]
+    >;
+    return calls[0]?.[0]?.where ?? {};
+  }
+
   beforeEach(() => {
     jest.clearAllMocks();
   });
 
-  it('lists every store with tenant name', async () => {
+  it('lists every store with tenant name and customerCount', async () => {
     prisma.store.findMany.mockResolvedValue([
       {
         id: 's1',
@@ -25,6 +36,7 @@ describe('StaffService', () => {
         tenantId: 't1',
         createdAt: new Date('2026-01-01T00:00:00Z'),
         tenant: { id: 't1', name: 'Tenant A', slug: 'tenant-a' },
+        _count: { customers: 3 },
       },
       {
         id: 's2',
@@ -34,6 +46,7 @@ describe('StaffService', () => {
         tenantId: 't2',
         createdAt: new Date('2026-02-01T00:00:00Z'),
         tenant: { id: 't2', name: 'Tenant B', slug: 'tenant-b' },
+        _count: { customers: 0 },
       },
     ]);
 
@@ -41,15 +54,21 @@ describe('StaffService', () => {
 
     expect(prisma.store.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        include: { tenant: { select: { id: true, name: true, slug: true } } },
+        include: {
+          tenant: { select: { id: true, name: true, slug: true } },
+          _count: { select: { customers: true } },
+        },
       }),
     );
     expect(stores).toHaveLength(2);
     expect(stores.map((s) => s.tenant.name)).toEqual(['Tenant A', 'Tenant B']);
+    expect(stores.map((s) => s.customerCount)).toEqual([3, 0]);
+    expect(stores[0]).not.toHaveProperty('_count');
   });
 
-  it('lists customers across tenants with lastContactedAt', async () => {
+  it('lists customers of one store with lastContactedAt and does not query other stores', async () => {
     const contactedAt = new Date('2026-08-20T15:00:00Z');
+    prisma.store.findUnique.mockResolvedValue({ id: 's1' });
     prisma.customer.findMany.mockResolvedValue([
       {
         id: 'c1',
@@ -63,32 +82,65 @@ describe('StaffService', () => {
         createdAt: new Date(),
         customerEvents: [{ occurredAt: contactedAt }],
         tenant: { id: 't1', name: 'Tenant A' },
-        store: { id: 's1', name: 'Loja A' },
-      },
-      {
-        id: 'c2',
-        tenantId: 't2',
-        storeId: 's2',
-        displayName: 'Bruno',
-        phoneMasked: '+55 ****-0002',
-        optedOutAt: null,
-        createdAt: new Date(),
-        customerEvents: [],
-        tenant: { id: 't2', name: 'Tenant B' },
-        store: { id: 's2', name: 'Loja B' },
+        store: { id: 's1', name: 'Loja A', slug: 'principal' },
       },
     ]);
 
-    const customers = await service.listCustomers();
+    const customers = await service.listCustomersForStore('s1');
 
-    expect(prisma.customer.findMany.mock.calls[0][0].where).toBeUndefined();
+    expect(prisma.store.findUnique).toHaveBeenCalledWith({
+      where: { id: 's1' },
+      select: { id: true },
+    });
+    const listedWhere = findManyWhere();
+    expect(listedWhere.storeId).toBe('s1');
+    expect(customers).toHaveLength(1);
+    expect(customers[0].id).toBe('c1');
     expect(customers[0].lastContactedAt).toEqual(contactedAt);
-    expect(customers[1].lastContactedAt).toBeNull();
     expect(customers[0].tenant.name).toBe('Tenant A');
-    expect(customers[1].store.name).toBe('Loja B');
+    expect(customers[0].store.name).toBe('Loja A');
     expect(customers[0].phoneE164).toBe('+5511999990001');
     expect(customers[0]).not.toHaveProperty('phoneEnc');
     expect(customers[0]).not.toHaveProperty('phoneHash');
+  });
+
+  it('returns 404 when listing customers of a missing store', async () => {
+    prisma.store.findUnique.mockResolvedValue(null);
+
+    await expect(
+      service.listCustomersForStore('missing'),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(prisma.customer.findMany).not.toHaveBeenCalled();
+  });
+
+  it('searches name and phone only inside the store slice', async () => {
+    prisma.store.findUnique.mockResolvedValue({ id: 's1' });
+    prisma.customer.findMany.mockResolvedValue([]);
+
+    await service.listCustomersForStore('s1', 'Ana');
+
+    const nameWhere = findManyWhere();
+    expect(nameWhere.storeId).toBe('s1');
+    expect(nameWhere.OR).toEqual(
+      expect.arrayContaining([{ displayName: { contains: 'Ana' } }]),
+    );
+  });
+
+  it('matches phone search by hash inside the same store only', async () => {
+    prisma.store.findUnique.mockResolvedValue({ id: 's1' });
+    prisma.customer.findMany.mockResolvedValue([]);
+
+    await service.listCustomersForStore('s1', '11999990001');
+
+    const expectedHash = hashPhone(normalizePhoneBr('11999990001'));
+    const phoneWhere = findManyWhere();
+    expect(phoneWhere.storeId).toBe('s1');
+    expect(phoneWhere.OR).toEqual(
+      expect.arrayContaining([
+        { displayName: { contains: '11999990001' } },
+        { phoneHash: expectedHash },
+      ]),
+    );
   });
 
   it('persists a contacted event with occurredAt for merchant cards', async () => {
@@ -116,20 +168,20 @@ describe('StaffService', () => {
       note: 'Ligou e deixou recado',
     });
 
-    expect(prisma.customerEvent.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({
-        tenantId: 't1',
-        storeId: 's1',
-        customerId: 'c1',
-        type: CUSTOMER_EVENT_CONTACTED,
-        occurredAt,
-        title: 'Contatado pela equipe Voltou',
-      }),
+    const createCalls = prisma.customerEvent.create.mock
+      .calls as unknown as Array<[{ data: { metadata: string } }]>;
+    expect(createCalls[0]?.[0].data).toMatchObject({
+      tenantId: 't1',
+      storeId: 's1',
+      customerId: 'c1',
+      type: CUSTOMER_EVENT_CONTACTED,
+      occurredAt,
+      title: 'Contatado pela equipe Voltou',
     });
-    const metadata = JSON.parse(
-      (prisma.customerEvent.create.mock.calls[0][0].data as { metadata: string })
-        .metadata,
-    );
+    const metadata = JSON.parse(createCalls[0][0].data.metadata) as {
+      staffUserId?: string;
+      channel?: string;
+    };
     expect(metadata).toMatchObject({
       staffUserId: 'staff-1',
       channel: 'call',

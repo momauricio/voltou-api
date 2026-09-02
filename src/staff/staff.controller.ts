@@ -5,6 +5,7 @@ import {
   Get,
   Param,
   Post,
+  Query,
   UnauthorizedException,
 } from '@nestjs/common';
 import { Roles } from '../auth/roles.decorator';
@@ -30,9 +31,20 @@ export class StaffController {
     return this.staffService.listStores();
   }
 
+  @Get('stores/:storeId/customers')
+  listStoreCustomers(
+    @Param('storeId') storeId: string,
+    @Query('q') q?: string,
+  ) {
+    return this.staffService.listCustomersForStore(storeId, q);
+  }
+
   @Get('customers')
-  listCustomers() {
-    return this.staffService.listCustomers();
+  listCustomers(@Query('storeId') storeId?: string, @Query('q') q?: string) {
+    if (!storeId) {
+      throw new BadRequestException('storeId é obrigatório.');
+    }
+    return this.staffService.listCustomersForStore(storeId, q);
   }
 
   @Post('customers/:id/contact')
