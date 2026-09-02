@@ -25,24 +25,9 @@ type BrasilApiCnpj = {
   situacao_cadastral?: string | number;
 };
 
-/** Validates check digits and confirms CNPJ is active via BrasilAPI. */
-export async function assertActiveCnpj(cnpj: string): Promise<void> {
-  if (!isValidCnpj(cnpj)) {
-    throw new Error('CNPJ inválido.');
-  }
+export type CnpjStatus = { ok: boolean; active: boolean };
 
-  const res = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`, {
-    headers: { Accept: 'application/json' },
-  });
-
-  if (res.status === 404) {
-    throw new Error('CNPJ não encontrado na Receita Federal.');
-  }
-  if (!res.ok) {
-    throw new Error('Não foi possível validar o CNPJ agora. Tente novamente.');
-  }
-
-  const data = (await res.json()) as BrasilApiCnpj;
+function isActiveSituation(data: BrasilApiCnpj): boolean {
   const situation = String(
     data.descricao_situacao_cadastral ?? data.situacao_cadastral ?? '',
   )
@@ -50,12 +35,58 @@ export async function assertActiveCnpj(cnpj: string): Promise<void> {
     .replace(/[\u0300-\u036f]/g, '')
     .toUpperCase();
 
-  const active =
+  return (
     situation.includes('ATIVA') ||
     situation === '2' ||
-    situation === 'ATIVA';
+    situation === 'ATIVA'
+  );
+}
 
-  if (!active) {
+async function fetchBrasilApiCnpj(
+  digits: string,
+): Promise<{ found: false } | { found: true; active: boolean }> {
+  const res = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${digits}`, {
+    headers: { Accept: 'application/json' },
+  });
+
+  if (res.status === 404) {
+    return { found: false };
+  }
+  if (!res.ok) {
+    throw new Error('Não foi possível validar o CNPJ agora. Tente novamente.');
+  }
+
+  const data = (await res.json()) as BrasilApiCnpj;
+  return { found: true, active: isActiveSituation(data) };
+}
+
+/** Public lookup: never returns the full Receita payload. */
+export async function getCnpjStatus(cnpj: string): Promise<CnpjStatus> {
+  const digits = cnpj.replace(/\D/g, '');
+  if (!isValidCnpj(digits)) {
+    return { ok: false, active: false };
+  }
+
+  const record = await fetchBrasilApiCnpj(digits);
+  if (!record.found) {
+    return { ok: false, active: false };
+  }
+  return { ok: true, active: record.active };
+}
+
+/** Validates check digits and confirms CNPJ is active via BrasilAPI. */
+export async function assertActiveCnpj(cnpj: string): Promise<void> {
+  if (!isValidCnpj(cnpj)) {
+    throw new Error('CNPJ inválido.');
+  }
+
+  const digits = cnpj.replace(/\D/g, '');
+  const record = await fetchBrasilApiCnpj(digits);
+
+  if (!record.found) {
+    throw new Error('CNPJ não encontrado na Receita Federal.');
+  }
+  if (!record.active) {
     throw new Error('CNPJ precisa estar ativo na Receita Federal.');
   }
 }

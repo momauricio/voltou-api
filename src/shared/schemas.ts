@@ -1,27 +1,91 @@
 import { z } from 'zod';
+import { parseBrMobileE164 } from '../common/phone.util';
 
 export const tenantIdSchema = z.string().uuid();
 export const storeIdSchema = z.string().uuid();
 
-export const registerSchema = z.object({
-  ownerName: z.string().trim().min(2).max(120),
-  storeName: z.string().trim().min(2).max(120),
-  cnpj: z
-    .string()
-    .transform((v) => v.replace(/\D/g, ''))
-    .refine((v) => v.length === 14, 'CNPJ deve ter 14 dígitos'),
-  email: z.string().trim().email().max(255).transform((v) => v.toLowerCase()),
-  password: z.string().min(8).max(128),
-});
+const OWNER_PHONE_MSG =
+  'Informe um celular brasileiro com DDD (11 dígitos, nono dígito 9).';
+
+function parseOwnerPhoneFields(data: {
+  ownerPhone?: string;
+  ownerPhoneE164?: string;
+}): string | null {
+  return parseBrMobileE164(data.ownerPhone ?? data.ownerPhoneE164 ?? '');
+}
+
+export const registerSchema = z
+  .object({
+    ownerName: z.string().trim().min(2).max(120),
+    storeName: z.string().trim().min(2).max(120),
+    cnpj: z
+      .string()
+      .transform((v) => v.replace(/\D/g, ''))
+      .refine((v) => v.length === 14, 'CNPJ deve ter 14 dígitos'),
+    email: z
+      .string()
+      .trim()
+      .email()
+      .max(255)
+      .transform((v) => v.toLowerCase()),
+    password: z.string().min(8).max(128),
+    ownerPhone: z.string().optional(),
+    ownerPhoneE164: z.string().optional(),
+  })
+  .transform((data, ctx) => {
+    const ownerPhoneE164 = parseOwnerPhoneFields(data);
+    if (!ownerPhoneE164) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: OWNER_PHONE_MSG,
+        path: ['ownerPhone'],
+      });
+      return z.NEVER;
+    }
+    return {
+      ownerName: data.ownerName,
+      storeName: data.storeName,
+      cnpj: data.cnpj,
+      email: data.email,
+      password: data.password,
+      ownerPhoneE164,
+    };
+  });
 
 export type RegisterInput = z.infer<typeof registerSchema>;
 
-export const loginSchema = z.object({
-  email: z.string().trim().email().transform((v) => v.toLowerCase()),
-  password: z.string().min(1).max(128),
-});
+export const loginSchema = z
+  .object({
+    email: z
+      .string()
+      .trim()
+      .email()
+      .max(255)
+      .transform((v) => v.toLowerCase())
+      .optional(),
+    identifier: z.string().trim().min(1).max(255).optional(),
+    password: z.string().min(1).max(128),
+  })
+  .refine((v) => Boolean(v.email || v.identifier), {
+    message: 'Informe email ou telefone.',
+  });
 
 export type LoginInput = z.infer<typeof loginSchema>;
+
+export const googleAuthSchema = z.object({
+  idToken: z.string().trim().min(1).max(8192),
+  ownerName: z.string().trim().min(2).max(120).optional(),
+  storeName: z.string().trim().min(2).max(120).optional(),
+  cnpj: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.replace(/\D/g, '') : undefined))
+    .refine((v) => v == null || v.length === 14, 'CNPJ deve ter 14 dígitos'),
+  ownerPhone: z.string().optional(),
+  ownerPhoneE164: z.string().optional(),
+});
+
+export type GoogleAuthInput = z.infer<typeof googleAuthSchema>;
 
 export const forgotPasswordSchema = z.object({
   email: z.string().trim().email().transform((v) => v.toLowerCase()),
