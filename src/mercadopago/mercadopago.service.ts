@@ -1,5 +1,7 @@
 import {
   BadRequestException,
+  HttpException,
+  HttpStatus,
   Injectable,
   NotFoundException,
   UnauthorizedException,
@@ -261,13 +263,21 @@ export class MercadoPagoService implements PaymentProvider {
 
   /**
    * Webhook: MP envia topic=payment&id=... ou body com data.id.
-   * Sempre grava WebhookLog; retorna checkoutId quando payment approved.
+   * MP_WEBHOOK_SECRET is required — missing/blank refuses before processing.
+   * Valid requests are logged; returns checkoutId when payment is approved.
    */
   async handleWebhook(
     query: Record<string, string>,
     body: unknown,
     headers?: Record<string, string | string[] | undefined>,
   ) {
+    const secret = process.env.MP_WEBHOOK_SECRET?.trim();
+    if (!secret) {
+      throw new UnauthorizedException(
+        'Webhook Mercado Pago sem segredo configurado.',
+      );
+    }
+
     const log = await this.prisma.webhookLog.create({
       data: {
         provider: 'mercadopago',
@@ -277,25 +287,23 @@ export class MercadoPagoService implements PaymentProvider {
     });
 
     try {
-      const secret = process.env.MP_WEBHOOK_SECRET?.trim();
-      if (secret) {
-        const signatureOk = this.verifyWebhookSignature(
-          secret,
-          query,
-          body,
-          headers,
+      const signatureOk = this.verifyWebhookSignature(
+        secret,
+        query,
+        body,
+        headers,
+      );
+      if (!signatureOk) {
+        await this.prisma.webhookLog.update({
+          where: { id: log.id },
+          data: {
+            processedOk: false,
+            error: 'assinatura inválida',
+          },
+        });
+        throw new UnauthorizedException(
+          'Assinatura do webhook Mercado Pago inválida.',
         );
-        if (!signatureOk) {
-          await this.prisma.webhookLog.update({
-            where: { id: log.id },
-            data: {
-              processedOk: false,
-              error: 'assinatura inválida',
-            },
-          });
-          // Ainda retornamos 200 no controller; aqui só registramos.
-          return { ignored: true, reason: 'assinatura inválida' };
-        }
       }
 
       const paymentId =
@@ -430,6 +438,15 @@ export class MercadoPagoService implements PaymentProvider {
           error: err instanceof Error ? err.message : String(err),
         },
       });
+      if (err instanceof HttpException) {
+        const status = err.getStatus();
+        if (
+          status === HttpStatus.UNAUTHORIZED ||
+          status === HttpStatus.FORBIDDEN
+        ) {
+          throw err;
+        }
+      }
       return {
         ignored: true,
         reason: err instanceof Error ? err.message : 'erro interno',

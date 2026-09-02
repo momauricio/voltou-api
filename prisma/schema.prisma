@@ -255,6 +255,8 @@ model Checkout {
   commissionCents   Int       @default(0)
   interestId        String?
   createdBy         String    @default("human") // human | ai
+  /// Staff user id from JWT `sub`. Never taken from the client body.
+  staffUserId       String?
   paidAt            DateTime?
   expiresAt         DateTime?
   /// Quando o lembrete de checkout pendente foi gerado (evita duplicar)

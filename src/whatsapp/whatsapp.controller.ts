@@ -4,13 +4,19 @@ import {
   Controller,
   Delete,
   Get,
+  Headers,
   Param,
   Post,
   Query,
+  Req,
+  type RawBodyRequest,
 } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
+import type { Request } from 'express';
 import { Public } from '../auth/public.decorator';
 import { z } from 'zod';
 import { WhatsAppService } from './whatsapp.service';
+import { assertWhatsAppWebhookHmac } from './webhook-hmac';
 
 const createSessionSchema = z.object({
   tenantId: z.string().uuid(),
@@ -34,8 +40,17 @@ export class WhatsAppController {
 
   /** WAHA → API: mensagens recebidas (e outros eventos filtrados no service). */
   @Public()
+  @SkipThrottle()
   @Post('webhook')
-  webhook(@Body() body: unknown) {
+  webhook(
+    @Req() req: RawBodyRequest<Request>,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+    @Body() body: unknown,
+  ) {
+    assertWhatsAppWebhookHmac({
+      headers,
+      rawBody: req.rawBody,
+    });
     return this.whatsappService.handleWebhook(body);
   }
 

@@ -30,8 +30,10 @@ describe('staff-only mutation metadata', () => {
     expect(rolesOf(CampaignsController.prototype, 'listMessages')).toBeUndefined();
   });
 
-  it('does not require staff to create checkouts on POST /checkouts', () => {
-    expect(rolesOf(CheckoutController.prototype, 'create')).toBeUndefined();
+  it('requires staff to create checkouts on POST /checkouts', () => {
+    expect(rolesOf(CheckoutController.prototype, 'create')).toEqual([
+      USER_ROLES.STAFF,
+    ]);
   });
 
   it('staff-gates POST /checkouts/:id/mark-paid so owner JWT is 403', () => {

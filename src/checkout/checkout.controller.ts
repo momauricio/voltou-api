@@ -6,12 +6,17 @@ import {
   Get,
   Param,
   Post,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { CheckoutService } from './checkout.service';
 import { createCheckoutSchema } from '../shared/schemas';
 import { Public } from '../auth/public.decorator';
 import { Roles } from '../auth/roles.decorator';
 import { USER_ROLES } from '../auth/roles';
+import {
+  CurrentUser,
+  type AccessTokenUser,
+} from '../auth/current-user.decorator';
 
 @Controller('checkouts')
 export class CheckoutController {
@@ -29,15 +34,24 @@ export class CheckoutController {
     return this.checkoutService.getByPublicToken(token);
   }
 
+  @Roles(USER_ROLES.STAFF)
   @Post()
-  create(@Body() body: unknown) {
+  create(
+    @Body() body: unknown,
+    @CurrentUser() user?: AccessTokenUser,
+  ) {
+    if (!user?.sub) {
+      throw new UnauthorizedException('Sessão inválida.');
+    }
     const parsed = createCheckoutSchema.safeParse(body);
     if (!parsed.success) {
       throw new BadRequestException(
         parsed.error.issues.map((i) => i.message).join(', '),
       );
     }
-    return this.checkoutService.create(parsed.data);
+    return this.checkoutService.create(parsed.data, {
+      staffUserId: user.sub,
+    });
   }
 
   /** Staff-gated 403: HTTP cannot mark paid. Webhook calls CheckoutService.markPaid. */

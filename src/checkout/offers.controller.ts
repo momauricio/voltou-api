@@ -6,7 +6,9 @@ import {
   Param,
   Post,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { Public } from '../auth/public.decorator';
+import { publicPayThrottle } from '../security/rate-limits';
 import { CheckoutService } from './checkout.service';
 
 @Controller('offers')
@@ -26,6 +28,7 @@ export class OffersController {
   }
 
   @Public()
+  @Throttle(publicPayThrottle)
   @Post('public/:storeSlug/:coupon/pay')
   pay(
     @Param('storeSlug') storeSlug: string,

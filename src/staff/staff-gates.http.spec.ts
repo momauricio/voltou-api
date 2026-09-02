@@ -127,7 +127,7 @@ describe('staff gates (http)', () => {
     expect(campaigns.approveAll).not.toHaveBeenCalled();
   });
 
-  it('lets owner create a checkout for its own tenant', async () => {
+  it('forbids owner JWT from POST /checkouts', async () => {
     const ownerTenant = '11111111-1111-1111-1111-111111111111';
     await request(app.getHttpServer())
       .post('/checkouts')
@@ -138,34 +138,31 @@ describe('staff gates (http)', () => {
         customerId: '33333333-3333-3333-3333-333333333333',
         productId: '44444444-4444-4444-4444-444444444444',
       })
-      .expect(201);
+      .expect(403);
 
-    expect(checkouts.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        tenantId: ownerTenant,
-        storeId: '22222222-2222-2222-2222-222222222222',
-        customerId: '33333333-3333-3333-3333-333333333333',
-        productId: '44444444-4444-4444-4444-444444444444',
-      }),
-    );
+    expect(checkouts.create).not.toHaveBeenCalled();
   });
 
-  it('keeps owner checkout scoped to the JWT tenant', async () => {
+  it('returns 401 on POST /checkouts without a token', async () => {
     await request(app.getHttpServer())
       .post('/checkouts')
-      .set(
-        'Authorization',
-        `Bearer ${jwt('owner', '11111111-1111-1111-1111-111111111111')}`,
-      )
       .send({
-        tenantId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+        tenantId: '11111111-1111-1111-1111-111111111111',
         storeId: '22222222-2222-2222-2222-222222222222',
         customerId: '33333333-3333-3333-3333-333333333333',
         productId: '44444444-4444-4444-4444-444444444444',
       })
-      .expect(403);
+      .expect(401);
 
     expect(checkouts.create).not.toHaveBeenCalled();
+  });
+
+  it('keeps GET /checkouts/public/:token public', async () => {
+    checkouts.getByPublicToken.mockResolvedValue({ id: 'chk-1' });
+    await request(app.getHttpServer())
+      .get('/checkouts/public/public-token')
+      .expect(200);
+    expect(checkouts.getByPublicToken).toHaveBeenCalledWith('public-token');
   });
 
   it('lets staff create a checkout for another tenant', async () => {
@@ -182,6 +179,8 @@ describe('staff gates (http)', () => {
         storeId: targetStore,
         customerId: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
         productId: 'dddddddd-dddd-dddd-dddd-dddddddddddd',
+        createdBy: 'ai',
+        staffUserId: 'forged-from-client',
       })
       .expect(201);
 
@@ -192,10 +191,15 @@ describe('staff gates (http)', () => {
         customerId: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
         productId: 'dddddddd-dddd-dddd-dddd-dddddddddddd',
       }),
+      { staffUserId: 'user-staff' },
     );
+    expect(checkouts.create.mock.calls[0][1]).toEqual({
+      staffUserId: 'user-staff',
+    });
+    expect(checkouts.create.mock.calls[0][0]).not.toHaveProperty('staffUserId');
   });
 
-  it('lets staff mint via POST /staff/checkouts for another tenant', async () => {
+  it('lets staff mint via POST /staff/checkouts and records JWT sub', async () => {
     const targetTenant = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
     await request(app.getHttpServer())
       .post('/staff/checkouts')
@@ -208,11 +212,14 @@ describe('staff gates (http)', () => {
         storeId: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
         customerId: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
         productId: 'dddddddd-dddd-dddd-dddd-dddddddddddd',
+        createdBy: 'ai',
+        staffUserId: 'forged-from-client',
       })
       .expect(201);
 
     expect(checkouts.create).toHaveBeenCalledWith(
       expect.objectContaining({ tenantId: targetTenant }),
+      { staffUserId: 'user-staff' },
     );
   });
 
