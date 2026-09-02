@@ -152,3 +152,11 @@ export const outreachMessageSchema = z.object({
 });
 
 export type OutreachMessageInput = z.infer<typeof outreachMessageSchema>;
+
+export const registerContactSchema = z.object({
+  occurredAt: z.string().datetime().optional(),
+  channel: z.enum(['call', 'whatsapp', 'other']).optional(),
+  note: z.string().trim().max(2000).optional(),
+});
+
+export type RegisterContactInput = z.infer<typeof registerContactSchema>;

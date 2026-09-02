@@ -290,7 +290,7 @@ model CustomerEvent {
   tenantId   String
   storeId    String
   customerId String
-  /// sale | interest | outreach | checkout_sent | checkout_paid | reply | note
+  /// sale | interest | outreach | checkout_sent | checkout_paid | reply | note | contacted
   type       String
   title      String
   detail     String?

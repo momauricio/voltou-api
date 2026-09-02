@@ -4,6 +4,8 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
 import { AccessTokenGuard } from './auth/access-token.guard';
+import { RolesGuard } from './auth/roles.guard';
+import { StaffModule } from './staff/staff.module';
 import { TenantsModule } from './tenants/tenants.module';
 import { StoresModule } from './stores/stores.module';
 import { ProductsModule } from './products/products.module';
@@ -36,6 +38,7 @@ import { MetricsModule } from './metrics/metrics.module';
     BlingModule,
     MercadoPagoModule,
     MetricsModule,
+    StaffModule,
   ],
   controllers: [AppController],
   providers: [
@@ -43,6 +46,10 @@ import { MetricsModule } from './metrics/metrics.module';
     {
       provide: APP_GUARD,
       useClass: AccessTokenGuard,
+    },
+    {
+      provide: APP_GUARD,
+      useClass: RolesGuard,
     },
   ],
 })

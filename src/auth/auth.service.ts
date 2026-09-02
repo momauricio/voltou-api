@@ -147,6 +147,7 @@ export class AuthService {
         storeName,
         tenantId: user.tenantId,
         storeId: store?.id ?? null,
+        role: user.role,
       },
     };
   }
@@ -231,6 +232,7 @@ export class AuthService {
         storeName: store?.name ?? user.tenant.name,
         tenantId: user.tenantId,
         storeId: store?.id ?? null,
+        role: user.role,
       },
     };
   }
