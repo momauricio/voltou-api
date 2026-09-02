@@ -30,10 +30,8 @@ describe('staff-only mutation metadata', () => {
     expect(rolesOf(CampaignsController.prototype, 'listMessages')).toBeUndefined();
   });
 
-  it('blocks checkout creation for owner JWT', () => {
-    expect(rolesOf(CheckoutController.prototype, 'create')).toEqual([
-      USER_ROLES.STAFF,
-    ]);
+  it('does not require staff to create checkouts on POST /checkouts', () => {
+    expect(rolesOf(CheckoutController.prototype, 'create')).toBeUndefined();
   });
 
   it('marks staff list/contact routes as staff-only', () => {

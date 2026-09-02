@@ -13,13 +13,17 @@ import {
   CurrentUser,
   type AccessTokenUser,
 } from '../auth/current-user.decorator';
-import { registerContactSchema } from '../shared/schemas';
+import { registerContactSchema, createCheckoutSchema } from '../shared/schemas';
 import { StaffService } from './staff.service';
+import { CheckoutService } from '../checkout/checkout.service';
 
 @Controller('staff')
 @Roles(USER_ROLES.STAFF)
 export class StaffController {
-  constructor(private readonly staffService: StaffService) {}
+  constructor(
+    private readonly staffService: StaffService,
+    private readonly checkoutService: CheckoutService,
+  ) {}
 
   @Get('stores')
   listStores() {
@@ -50,5 +54,16 @@ export class StaffController {
       staffUserId: user.sub,
       ...parsed.data,
     });
+  }
+
+  @Post('checkouts')
+  createCheckout(@Body() body: unknown) {
+    const parsed = createCheckoutSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new BadRequestException(
+        parsed.error.issues.map((i) => i.message).join(', '),
+      );
+    }
+    return this.checkoutService.create(parsed.data);
   }
 }
