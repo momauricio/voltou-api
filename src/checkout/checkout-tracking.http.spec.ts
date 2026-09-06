@@ -128,6 +128,28 @@ describe('owner checkout trackingCode (http)', () => {
     expect(prisma.checkout.findMany).not.toHaveBeenCalled();
   });
 
+  it('PATCH /checkouts/:id/fulfillment sets trackingCode when fulfillmentMethod is still null', async () => {
+    prisma.checkout.findFirst.mockResolvedValue(
+      paidCheckout({ fulfillmentMethod: null }),
+    );
+    prisma.checkout.update.mockResolvedValue(
+      paidCheckout({ fulfillmentMethod: null, trackingCode: 'ABC123' }),
+    );
+
+    const res = await request(app.getHttpServer())
+      .patch(`/checkouts/${checkoutId}/fulfillment`)
+      .set('Authorization', `Bearer ${jwt('owner')}`)
+      .send({
+        tenantId: ownerTenant,
+        storeId,
+        trackingCode: 'ABC123',
+      })
+      .expect(200);
+
+    expect(prisma.checkout.update).toHaveBeenCalled();
+    expect(res.body.trackingCode).toBe('ABC123');
+  });
+
   it('PATCH /checkouts/:id/fulfillment sets trackingCode on delivery', async () => {
     prisma.checkout.findFirst.mockResolvedValue(paidCheckout());
     prisma.checkout.update.mockResolvedValue(
@@ -238,6 +260,46 @@ describe('owner checkout trackingCode (http)', () => {
         where: expect.objectContaining({
           id: checkoutId,
           tenantId: ownerTenant,
+          status: 'paid',
+        }),
+      }),
+    );
+    expect(prisma.checkout.update).not.toHaveBeenCalled();
+  });
+
+  it('PATCH forbids another tenantId on owner JWT', async () => {
+    await request(app.getHttpServer())
+      .patch(`/checkouts/${checkoutId}/fulfillment`)
+      .set('Authorization', `Bearer ${jwt('owner')}`)
+      .send({
+        tenantId: otherTenant,
+        storeId,
+        trackingCode: 'BR123',
+      })
+      .expect(403);
+    expect(prisma.checkout.findFirst).not.toHaveBeenCalled();
+    expect(prisma.checkout.update).not.toHaveBeenCalled();
+  });
+
+  it('PATCH does not set trackingCode on a pending checkout', async () => {
+    prisma.checkout.findFirst.mockResolvedValue(null);
+
+    await request(app.getHttpServer())
+      .patch(`/checkouts/${checkoutId}/fulfillment`)
+      .set('Authorization', `Bearer ${jwt('owner')}`)
+      .send({
+        tenantId: ownerTenant,
+        storeId,
+        trackingCode: 'BR123',
+      })
+      .expect(404);
+
+    expect(prisma.checkout.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          id: checkoutId,
+          tenantId: ownerTenant,
+          status: 'paid',
         }),
       }),
     );

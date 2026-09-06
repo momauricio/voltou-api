@@ -29,9 +29,13 @@ export function isHomeDeliveryFulfillment(method?: string | null): boolean {
   return Boolean(v && DELIVERY.has(v));
 }
 
-/** Tracking is only for home delivery — reject pickup/retirada and unknown. */
+/**
+ * Tracking is for home delivery. Reject explicit pickup/retirada.
+ * Unknown/null is allowed until payment persists fulfillmentMethod
+ * (that write path is not on this branch).
+ */
 export function assertTrackingAllowed(method?: string | null): void {
-  if (isPickupFulfillment(method) || !isHomeDeliveryFulfillment(method)) {
+  if (isPickupFulfillment(method)) {
     throw new BadRequestException(
       'Código de rastreio só pode ser informado em pedidos de entrega.',
     );

@@ -91,6 +91,7 @@ export class CheckoutService {
       where: {
         id: checkoutId,
         tenantId,
+        status: 'paid',
         ...(input.storeId ? { storeId: input.storeId } : {}),
       },
       include: { customer: { select: { displayName: true } } },

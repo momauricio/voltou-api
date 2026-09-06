@@ -42,9 +42,9 @@ describe('assertTrackingAllowed', () => {
     expect(() => assertTrackingAllowed('PICKUP')).toThrow(BadRequestException);
   });
 
-  it('rejects missing fulfillment method', () => {
-    expect(() => assertTrackingAllowed(null)).toThrow(BadRequestException);
-    expect(() => assertTrackingAllowed(undefined)).toThrow(BadRequestException);
-    expect(() => assertTrackingAllowed('')).toThrow(BadRequestException);
+  it('allows missing fulfillment method until payment persists it', () => {
+    expect(() => assertTrackingAllowed(null)).not.toThrow();
+    expect(() => assertTrackingAllowed(undefined)).not.toThrow();
+    expect(() => assertTrackingAllowed('')).not.toThrow();
   });
 });

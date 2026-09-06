@@ -160,7 +160,6 @@ export type CreateCheckoutInput = z.infer<typeof createCheckoutSchema>;
 export const updateCheckoutFulfillmentSchema = z.object({
   tenantId: tenantIdSchema.optional(),
   storeId: storeIdSchema.optional(),
-  status: z.enum(['ready', 'shipped', 'done']).optional(),
   trackingCode: z
     .union([
       z
