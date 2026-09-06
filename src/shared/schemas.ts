@@ -157,6 +157,25 @@ export const createCheckoutSchema = z.object({
 
 export type CreateCheckoutInput = z.infer<typeof createCheckoutSchema>;
 
+export const updateCheckoutFulfillmentSchema = z.object({
+  tenantId: tenantIdSchema.optional(),
+  storeId: storeIdSchema.optional(),
+  status: z.enum(['ready', 'shipped', 'done']).optional(),
+  trackingCode: z
+    .union([
+      z
+        .string()
+        .trim()
+        .max(120, 'Código de rastreio deve ter no máximo 120 caracteres.'),
+      z.null(),
+    ])
+    .optional(),
+});
+
+export type UpdateCheckoutFulfillmentInput = z.infer<
+  typeof updateCheckoutFulfillmentSchema
+>;
+
 export const createProductSchema = z.object({
   tenantId: tenantIdSchema,
   storeId: storeIdSchema,
