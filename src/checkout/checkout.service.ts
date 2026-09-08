@@ -8,7 +8,10 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { CreateCheckoutInput } from '../shared/schemas';
+import {
+  CreateCheckoutInput,
+  type UpdateCheckoutFulfillmentInput,
+} from '../shared/schemas';
 import { randomBytes, randomUUID } from 'crypto';
 import {
   PAYMENT_PROVIDER,
@@ -40,6 +43,10 @@ import {
   expectedPaidLines,
   findMissingPaidLines,
 } from './mark-paid-sales';
+import {
+  assertTrackingAllowed,
+  normalizeTrackingCode,
+} from './checkout-tracking';
 
 @Injectable()
 export class CheckoutService {
@@ -59,6 +66,50 @@ export class CheckoutService {
       status: 'ok',
       provider: this.paymentProvider?.id ?? 'stub',
     };
+  }
+
+  /** Paid checkouts for the lojista Pedidos panel (`GET /checkouts/orders`). */
+  async listOrders(tenantId: string, storeId: string) {
+    const rows = await this.prisma.checkout.findMany({
+      where: { tenantId, storeId, status: 'paid' },
+      include: { customer: { select: { displayName: true } } },
+      orderBy: { paidAt: 'desc' },
+    });
+    return rows.map((row) => this.toMerchantOrder(row));
+  }
+
+  /**
+   * Owner sets/clears `trackingCode` on their tenant's checkout.
+   * Only home delivery (`delivery` / `home` / `entrega`). Pickup is rejected.
+   */
+  async updateFulfillment(
+    checkoutId: string,
+    tenantId: string,
+    input: UpdateCheckoutFulfillmentInput,
+  ) {
+    const checkout = await this.prisma.checkout.findFirst({
+      where: {
+        id: checkoutId,
+        tenantId,
+        status: 'paid',
+        ...(input.storeId ? { storeId: input.storeId } : {}),
+      },
+      include: { customer: { select: { displayName: true } } },
+    });
+    if (!checkout) throw new NotFoundException('Pedido não encontrado.');
+
+    if (input.trackingCode === undefined) {
+      return this.toMerchantOrder(checkout);
+    }
+
+    assertTrackingAllowed(checkout.fulfillmentMethod);
+    const trackingCode = normalizeTrackingCode(input.trackingCode);
+    const updated = await this.prisma.checkout.update({
+      where: { id: checkout.id },
+      data: { trackingCode },
+      include: { customer: { select: { displayName: true } } },
+    });
+    return this.toMerchantOrder(updated);
   }
 
   async create(
@@ -689,6 +740,39 @@ export class CheckoutService {
     }
 
     return result.checkout;
+  }
+
+  private toMerchantOrder(row: {
+    id: string;
+    couponCode: string | null;
+    productNameSnapshot: string;
+    amountCents: number;
+    commissionCents: number;
+    fulfillmentMethod: string | null;
+    trackingCode: string | null;
+    mpPaymentId: string | null;
+    status: string;
+    paidLinesJson: string | null;
+    paidAt: Date | null;
+    customer: { displayName: string };
+  }) {
+    return {
+      id: row.id,
+      couponCode: row.couponCode,
+      productName: row.productNameSnapshot,
+      amountCents: row.amountCents,
+      shippingCents: 0,
+      commissionCents: row.commissionCents,
+      fulfillmentMethod: row.fulfillmentMethod ?? null,
+      fulfillmentStatus: null as string | null,
+      trackingCode: row.trackingCode ?? null,
+      mpPaymentId: row.mpPaymentId ?? null,
+      status: row.status,
+      shippingAddress: null,
+      paidLines: parsePaidLinesJson(row.paidLinesJson),
+      customerName: row.customer.displayName,
+      paidAt: row.paidAt,
+    };
   }
 
   private async findByStoreSlugAndCoupon(storeSlug: string, coupon: string) {

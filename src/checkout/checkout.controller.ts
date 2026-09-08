@@ -5,11 +5,16 @@ import {
   ForbiddenException,
   Get,
   Param,
+  Patch,
   Post,
+  Query,
   UnauthorizedException,
 } from '@nestjs/common';
 import { CheckoutService } from './checkout.service';
-import { createCheckoutSchema } from '../shared/schemas';
+import {
+  createCheckoutSchema,
+  updateCheckoutFulfillmentSchema,
+} from '../shared/schemas';
 import { Public } from '../auth/public.decorator';
 import { Roles } from '../auth/roles.decorator';
 import { USER_ROLES } from '../auth/roles';
@@ -32,6 +37,36 @@ export class CheckoutController {
   @Get('public/:token')
   getPublic(@Param('token') token: string) {
     return this.checkoutService.getByPublicToken(token);
+  }
+
+  @Get('orders')
+  listOrders(
+    @Query('tenantId') tenantId?: string,
+    @Query('storeId') storeId?: string,
+  ) {
+    if (!tenantId || !storeId) {
+      throw new BadRequestException('tenantId e storeId são obrigatórios.');
+    }
+    return this.checkoutService.listOrders(tenantId, storeId);
+  }
+
+  @Patch(':id/fulfillment')
+  updateFulfillment(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @CurrentUser() user?: AccessTokenUser,
+  ) {
+    if (!user?.sub) {
+      throw new UnauthorizedException('Sessão inválida.');
+    }
+    const parsed = updateCheckoutFulfillmentSchema.safeParse(body ?? {});
+    if (!parsed.success) {
+      throw new BadRequestException(
+        parsed.error.issues.map((i) => i.message).join(', '),
+      );
+    }
+    const tenantId = parsed.data.tenantId ?? user.tenantId;
+    return this.checkoutService.updateFulfillment(id, tenantId, parsed.data);
   }
 
   @Roles(USER_ROLES.STAFF)

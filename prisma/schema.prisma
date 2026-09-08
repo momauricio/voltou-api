@@ -263,6 +263,10 @@ model Checkout {
   reminderAt        DateTime?
   addonsJson        String?
   paidLinesJson     String?
+  /// pickup | delivery | home | retirada | entrega — free string, not a carrier enum
+  fulfillmentMethod String?
+  /// Optional carrier tracking code (entrega only). Max 120 at the API layer.
+  trackingCode      String?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
