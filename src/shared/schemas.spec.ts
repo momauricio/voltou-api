@@ -1,4 +1,10 @@
-import { googleAuthSchema, loginSchema, registerSchema } from './schemas';
+import {
+  createCustomerSchema,
+  googleAuthSchema,
+  loginSchema,
+  registerSchema,
+  updateCustomerSchema,
+} from './schemas';
 
 const validRegister = {
   ownerName: 'Maria Silva',
@@ -74,5 +80,63 @@ describe('googleAuthSchema', () => {
     expect(googleAuthSchema.safeParse({}).success).toBe(false);
     expect(googleAuthSchema.parse({ idToken: 'google-id-token-value' }).idToken)
       .toBe('google-id-token-value');
+  });
+});
+
+describe('lastPurchasedItem ("O que ele levou")', () => {
+  const baseCustomer = {
+    tenantId: '11111111-1111-4111-8111-111111111111',
+    storeId: '22222222-2222-4222-8222-222222222222',
+    displayName: 'Ana Souza',
+    phone: '11987654321',
+  };
+
+  it('is optional on create (absent → null)', () => {
+    const parsed = createCustomerSchema.parse(baseCustomer);
+    expect(parsed.lastPurchasedItem).toBeNull();
+  });
+
+  it('trims and turns blank into null', () => {
+    expect(
+      createCustomerSchema.parse({
+        ...baseCustomer,
+        lastPurchasedItem: '  Tênis Nike  ',
+      }).lastPurchasedItem,
+    ).toBe('Tênis Nike');
+    expect(
+      createCustomerSchema.parse({ ...baseCustomer, lastPurchasedItem: '   ' })
+        .lastPurchasedItem,
+    ).toBeNull();
+  });
+
+  it('rejects more than 120 chars with a PT-BR message', () => {
+    const parsed = createCustomerSchema.safeParse({
+      ...baseCustomer,
+      lastPurchasedItem: 'x'.repeat(121),
+    });
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(parsed.error.issues[0].message).toContain('no máximo 120');
+    }
+    expect(
+      createCustomerSchema.safeParse({
+        ...baseCustomer,
+        lastPurchasedItem: 'x'.repeat(120),
+      }).success,
+    ).toBe(true);
+  });
+
+  it('on update: absent keeps undefined (no change), null/"" clears', () => {
+    expect(updateCustomerSchema.parse({}).lastPurchasedItem).toBeUndefined();
+    expect(
+      updateCustomerSchema.parse({ lastPurchasedItem: null }).lastPurchasedItem,
+    ).toBeNull();
+    expect(
+      updateCustomerSchema.parse({ lastPurchasedItem: '' }).lastPurchasedItem,
+    ).toBeNull();
+    expect(
+      updateCustomerSchema.parse({ lastPurchasedItem: ' Bolsa ' })
+        .lastPurchasedItem,
+    ).toBe('Bolsa');
   });
 });

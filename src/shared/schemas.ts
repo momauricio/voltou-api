@@ -103,18 +103,41 @@ export const verifyEmailSchema = z.object({
 
 export type VerifyEmailInput = z.infer<typeof verifyEmailSchema>;
 
+export const LAST_PURCHASED_ITEM_MAX = 120;
+
+/** "O que ele levou": opcional; trim; vazio/espaços → null; máx. 120. */
+const lastPurchasedItemSchema = z
+  .string()
+  .nullish()
+  .transform((v) => {
+    const t = v?.trim();
+    return t ? t : null;
+  })
+  .refine((v) => v == null || v.length <= LAST_PURCHASED_ITEM_MAX, {
+    message: `"O que ele levou" deve ter no máximo ${LAST_PURCHASED_ITEM_MAX} caracteres.`,
+  });
+
 export const createCustomerSchema = z.object({
   tenantId: tenantIdSchema,
   storeId: storeIdSchema,
   displayName: z.string().trim().min(2).max(200),
   phone: z.string().min(8).max(30),
   notes: z.string().max(2000).optional(),
+  lastPurchasedItem: lastPurchasedItemSchema,
   interestProductId: z.string().uuid().optional(),
   interestProductName: z.string().trim().min(1).max(200).optional(),
   interestNotes: z.string().max(1000).optional(),
 });
 
 export type CreateCustomerInput = z.infer<typeof createCustomerSchema>;
+
+/** PATCH /customers/:id — só campos editáveis pelo lojista (sem telefone). */
+export const updateCustomerSchema = z.object({
+  /** ausente = não altera; null/"" = limpa */
+  lastPurchasedItem: lastPurchasedItemSchema.optional(),
+});
+
+export type UpdateCustomerInput = z.infer<typeof updateCustomerSchema>;
 
 export const createInterestSchema = z.object({
   tenantId: tenantIdSchema,
