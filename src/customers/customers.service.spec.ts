@@ -106,3 +106,54 @@ describe('CustomersService lastContactedAt', () => {
     expect(rows[0].lastContactedAt).toBeNull();
   });
 });
+
+describe('CustomersService.update (lastPurchasedItem)', () => {
+  const prisma = {
+    customer: { findFirst: jest.fn(), update: jest.fn() },
+    customerEvent: { findFirst: jest.fn() },
+  };
+  const service = new CustomersService(prisma as never);
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    prisma.customerEvent.findFirst.mockResolvedValue(null);
+  });
+
+  it('updates the field scoped to the tenant and returns the detail', async () => {
+    prisma.customer.findFirst
+      .mockResolvedValueOnce({ id: 'c1' })
+      .mockResolvedValueOnce({
+        id: 'c1',
+        displayName: 'Ana',
+        lastPurchasedItem: 'Bolsa',
+      });
+
+    const detail = await service.update('tenant-1', 'c1', {
+      lastPurchasedItem: 'Bolsa',
+    });
+
+    expect(prisma.customer.findFirst).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ where: { id: 'c1', tenantId: 'tenant-1' } }),
+    );
+    expect(prisma.customer.update).toHaveBeenCalledWith({
+      where: { id: 'c1' },
+      data: { lastPurchasedItem: 'Bolsa' },
+    });
+    expect(detail.lastPurchasedItem).toBe('Bolsa');
+  });
+
+  it('does not write when the field is absent', async () => {
+    prisma.customer.findFirst.mockResolvedValue({ id: 'c1' });
+    await service.update('tenant-1', 'c1', {});
+    expect(prisma.customer.update).not.toHaveBeenCalled();
+  });
+
+  it('404s for a customer of another tenant', async () => {
+    prisma.customer.findFirst.mockResolvedValue(null);
+    await expect(
+      service.update('tenant-1', 'c-other', { lastPurchasedItem: 'x' }),
+    ).rejects.toThrow('Cliente não encontrado.');
+    expect(prisma.customer.update).not.toHaveBeenCalled();
+  });
+});

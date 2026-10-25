@@ -143,6 +143,8 @@ model Customer {
   /// Masked display only (never full plaintext in UI logs)
   phoneMasked String?
   notes       String?
+  /// "O que ele levou" — texto livre opcional (máx. 120); alimenta {peça} na msg de 2ª venda
+  lastPurchasedItem String?
   /// LGPD: cliente pediu para não receber mensagens (respeitado em qualquer disparo)
   optedOutAt  DateTime?
   createdAt   DateTime @default(now())

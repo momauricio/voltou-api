@@ -5,13 +5,18 @@ import {
   Delete,
   Get,
   Param,
+  Patch,
   Post,
   Query,
 } from '@nestjs/common';
 import { Public } from '../auth/public.decorator';
 import { CustomersService } from './customers.service';
 import { SegmentsService } from './segments.service';
-import { createCustomerSchema, createInterestSchema } from '../shared/schemas';
+import {
+  createCustomerSchema,
+  createInterestSchema,
+  updateCustomerSchema,
+} from '../shared/schemas';
 
 @Controller('customers')
 export class CustomersController {
@@ -69,6 +74,24 @@ export class CustomersController {
       );
     }
     return this.customersService.create(parsed.data);
+  }
+
+  @Patch(':id')
+  update(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @Query('tenantId') tenantId?: string,
+  ) {
+    if (!tenantId) {
+      throw new BadRequestException('tenantId é obrigatório.');
+    }
+    const parsed = updateCustomerSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new BadRequestException(
+        parsed.error.issues.map((i) => i.message).join(', '),
+      );
+    }
+    return this.customersService.update(tenantId, id, parsed.data);
   }
 
   @Post('interests')

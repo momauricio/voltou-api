@@ -7,6 +7,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import {
   CreateCustomerInput,
   CreateInterestInput,
+  UpdateCustomerInput,
 } from '../shared/schemas';
 import {
   encryptPhone,
@@ -170,6 +171,7 @@ export class CustomersService {
         phoneEnc: encryptPhone(phone),
         phoneMasked: maskPhone(phone),
         notes: input.notes,
+        lastPurchasedItem: input.lastPurchasedItem,
       },
     });
 
@@ -198,6 +200,27 @@ export class CustomersService {
     }
 
     return this.getDetail(input.tenantId, customer.id);
+  }
+
+  async update(
+    tenantId: string,
+    customerId: string,
+    input: UpdateCustomerInput,
+  ) {
+    const customer = await this.prisma.customer.findFirst({
+      where: { id: customerId, tenantId },
+      select: { id: true },
+    });
+    if (!customer) throw new NotFoundException('Cliente não encontrado.');
+
+    if (input.lastPurchasedItem !== undefined) {
+      await this.prisma.customer.update({
+        where: { id: customerId },
+        data: { lastPurchasedItem: input.lastPurchasedItem },
+      });
+    }
+
+    return this.getDetail(tenantId, customerId);
   }
 
   async setOptOut(tenantId: string, customerId: string, optedOut: boolean) {
