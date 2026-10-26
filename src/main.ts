@@ -1,15 +1,27 @@
+import { readFileSync } from 'fs';
+
+// WAHA webhook HMAC secret may be provisioned as a file in the container.
+// Read before dotenv (like prod), so the file value wins over .env.
+try {
+  const hmac = readFileSync('/app/.whatsapp-hook-hmac-key', 'utf8').trim();
+  if (hmac) process.env.WHATSAPP_HOOK_HMAC_KEY = hmac;
+} catch {
+  /* optional file */
+}
+
 import 'dotenv/config';
-import { NestFactory } from '@nestjs/core';
-import { NestExpressApplication } from '@nestjs/platform-express';
-import { AppModule } from './app.module';
-import { assertAuthSecret } from './auth/auth-secret';
+import { assertAuthSecret, AUTH_SECRET_UNSAFE_MESSAGE } from './auth/auth-secret';
 
 try {
   assertAuthSecret();
 } catch (err) {
-  console.error(err instanceof Error ? err.message : err);
+  console.error(err instanceof Error ? err.message : AUTH_SECRET_UNSAFE_MESSAGE);
   process.exit(1);
 }
+
+import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
+import { AppModule } from './app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {

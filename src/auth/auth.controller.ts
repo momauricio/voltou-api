@@ -9,13 +9,13 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
+import {
+  CNPJ_THROTTLE,
+  LOGIN_THROTTLE,
+  REGISTER_THROTTLE,
+} from '../security/rate-limits';
 import { AuthService } from './auth.service';
 import { Public } from './public.decorator';
-import {
-  cnpjStatusThrottle,
-  loginThrottle,
-  registerThrottle,
-} from '../security/rate-limits';
 import {
   changePasswordSchema,
   forgotPasswordSchema,
@@ -45,7 +45,7 @@ export class AuthController {
   }
 
   @Public()
-  @Throttle(registerThrottle)
+  @Throttle(REGISTER_THROTTLE)
   @Post('register')
   register(@Body() body: unknown) {
     const parsed = registerSchema.safeParse(body);
@@ -58,7 +58,7 @@ export class AuthController {
   }
 
   @Public()
-  @Throttle(cnpjStatusThrottle)
+  @Throttle(CNPJ_THROTTLE)
   @Get('cnpj-status')
   cnpjStatus(@Query('cnpj') cnpj?: string) {
     if (!cnpj?.trim()) {
@@ -80,7 +80,7 @@ export class AuthController {
   }
 
   @Public()
-  @Throttle(loginThrottle)
+  @Throttle(LOGIN_THROTTLE)
   @Post('login')
   login(@Body() body: unknown) {
     const parsed = loginSchema.safeParse(body);

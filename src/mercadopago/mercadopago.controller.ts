@@ -6,7 +6,6 @@ import {
   Get,
   Headers,
   HttpException,
-  HttpStatus,
   Inject,
   Post,
   Query,
@@ -123,14 +122,8 @@ export class MercadoPagoController {
       }
       return { ok: true, ...result };
     } catch (err) {
-      if (err instanceof HttpException) {
-        const status = err.getStatus();
-        if (
-          status === HttpStatus.UNAUTHORIZED ||
-          status === HttpStatus.FORBIDDEN
-        ) {
-          throw err;
-        }
+      if (err instanceof HttpException && [401, 403].includes(err.getStatus())) {
+        throw err;
       }
       return {
         ok: true,

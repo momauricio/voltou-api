@@ -73,17 +73,15 @@ export class StaffController {
     @Body() body: unknown,
     @CurrentUser() user?: AccessTokenUser,
   ) {
-    if (!user?.sub) {
-      throw new UnauthorizedException('Sessão inválida.');
-    }
+    // Message (incl. the "invlida" typo) matches production verbatim.
+    if (user == null || user.sub == null || user.sub === '')
+      throw new UnauthorizedException('Sessão invlida.');
     const parsed = createCheckoutSchema.safeParse(body);
     if (!parsed.success) {
       throw new BadRequestException(
         parsed.error.issues.map((i) => i.message).join(', '),
       );
     }
-    return this.checkoutService.create(parsed.data, {
-      staffUserId: user.sub,
-    });
+    return this.checkoutService.create(parsed.data, { staffUserId: user.sub });
   }
 }

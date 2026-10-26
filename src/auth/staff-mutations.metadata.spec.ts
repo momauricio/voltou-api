@@ -36,10 +36,12 @@ describe('staff-only mutation metadata', () => {
     ]);
   });
 
-  it('staff-gates POST /checkouts/:id/mark-paid so owner JWT is 403', () => {
-    expect(rolesOf(CheckoutController.prototype, 'markPaid')).toEqual([
-      USER_ROLES.STAFF,
-    ]);
+  it('POST /checkouts/:id/mark-paid has no role gate (prod): handler always 403s', () => {
+    expect(rolesOf(CheckoutController.prototype, 'markPaid')).toBeUndefined();
+    const controller = new CheckoutController({} as never);
+    expect(() => controller.markPaid('id', {})).toThrow(
+      'Pagamento só pode ser confirmado pelo Mercado Pago.',
+    );
   });
 
   it('marks staff list/contact routes as staff-only', () => {

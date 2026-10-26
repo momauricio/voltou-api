@@ -8,7 +8,7 @@ import { AuthService } from '../auth/auth.service';
 import { OffersController } from '../checkout/offers.controller';
 import { CheckoutService } from '../checkout/checkout.service';
 import {
-  CNPJ_STATUS_PER_MIN,
+  CNPJ_PER_MIN,
   LOGIN_PER_MIN,
   PUBLIC_PAY_PER_MIN,
   REGISTER_PER_MIN,
@@ -86,9 +86,9 @@ describe('public auth and pay rate limits (http)', () => {
     await request(server).post('/auth/register').send(body).expect(429);
   });
 
-  it(`returns 429 after ${CNPJ_STATUS_PER_MIN} cnpj-status lookups per IP per minute`, async () => {
+  it(`returns 429 after ${CNPJ_PER_MIN} cnpj-status lookups per IP per minute`, async () => {
     const server = app.getHttpServer();
-    for (let i = 0; i < CNPJ_STATUS_PER_MIN; i++) {
+    for (let i = 0; i < CNPJ_PER_MIN; i++) {
       await request(server)
         .get('/auth/cnpj-status')
         .query({ cnpj: '11222333000181' })

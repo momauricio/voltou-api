@@ -11,10 +11,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { CheckoutService } from './checkout.service';
-import {
-  createCheckoutSchema,
-  updateCheckoutFulfillmentSchema,
-} from '../shared/schemas';
+import { createCheckoutSchema } from '../shared/schemas';
 import { Public } from '../auth/public.decorator';
 import { Roles } from '../auth/roles.decorator';
 import { USER_ROLES } from '../auth/roles';
@@ -43,30 +40,16 @@ export class CheckoutController {
   listOrders(
     @Query('tenantId') tenantId?: string,
     @Query('storeId') storeId?: string,
+    @Query('fulfillmentStatus') fulfillmentStatus?: string,
   ) {
     if (!tenantId || !storeId) {
-      throw new BadRequestException('tenantId e storeId são obrigatórios.');
+      throw new BadRequestException('tenantId e storeId obrigatórios.');
     }
-    return this.checkoutService.listOrders(tenantId, storeId);
-  }
-
-  @Patch(':id/fulfillment')
-  updateFulfillment(
-    @Param('id') id: string,
-    @Body() body: unknown,
-    @CurrentUser() user?: AccessTokenUser,
-  ) {
-    if (!user?.sub) {
-      throw new UnauthorizedException('Sessão inválida.');
-    }
-    const parsed = updateCheckoutFulfillmentSchema.safeParse(body ?? {});
-    if (!parsed.success) {
-      throw new BadRequestException(
-        parsed.error.issues.map((i) => i.message).join(', '),
-      );
-    }
-    const tenantId = parsed.data.tenantId ?? user.tenantId;
-    return this.checkoutService.updateFulfillment(id, tenantId, parsed.data);
+    return this.checkoutService.listPaidOrders(
+      tenantId,
+      storeId,
+      fulfillmentStatus,
+    );
   }
 
   @Roles(USER_ROLES.STAFF)
@@ -75,26 +58,45 @@ export class CheckoutController {
     @Body() body: unknown,
     @CurrentUser() user?: AccessTokenUser,
   ) {
-    if (!user?.sub) {
-      throw new UnauthorizedException('Sessão inválida.');
-    }
     const parsed = createCheckoutSchema.safeParse(body);
     if (!parsed.success) {
       throw new BadRequestException(
         parsed.error.issues.map((i) => i.message).join(', '),
       );
     }
-    return this.checkoutService.create(parsed.data, {
-      staffUserId: user.sub,
-    });
+    if (user == null || user.sub == null || user.sub === '')
+      throw new UnauthorizedException('Sessão inválida.');
+    return this.checkoutService.create(parsed.data, { staffUserId: user.sub });
   }
 
-  /** Staff-gated 403: HTTP cannot mark paid. Webhook calls CheckoutService.markPaid. */
-  @Roles(USER_ROLES.STAFF)
+  /** HTTP cannot mark paid. Webhook / transparent flow call CheckoutService.markPaid. */
   @Post(':id/mark-paid')
-  markPaid() {
+  markPaid(@Param('id') id: string, @Body() body: unknown) {
     throw new ForbiddenException(
       'Pagamento só pode ser confirmado pelo Mercado Pago.',
     );
+  }
+
+  @Patch(':id/fulfillment')
+  patchFulfillment(
+    @Param('id') id: string,
+    @Body()
+    body: { tenantId?: string; storeId?: string; trackingCode?: unknown } | undefined,
+    @CurrentUser() user?: AccessTokenUser,
+  ) {
+    if (!user || !user.sub) throw new UnauthorizedException('Sessao invalida.');
+    const tenantId = body && body.tenantId ? body.tenantId : user.tenantId;
+    if (!tenantId) throw new BadRequestException('tenantId obrigatorio.');
+    if (
+      body &&
+      body.trackingCode !== undefined &&
+      body.trackingCode !== null &&
+      typeof body.trackingCode !== 'string'
+    )
+      throw new BadRequestException('Invalid tracking code');
+    return this.checkoutService.updateFulfillment(id, tenantId, {
+      storeId: body && body.storeId,
+      trackingCode: body ? body.trackingCode : undefined,
+    });
   }
 }

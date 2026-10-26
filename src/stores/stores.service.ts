@@ -1,5 +1,9 @@
-﻿import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { parseBrMobileE164 } from '../common/phone.util';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { normalizePhoneBr } from '../common/phone.util';
 import { PrismaService } from '../prisma/prisma.service';
 
 export type CheckoutBrandingInput = {
@@ -10,7 +14,9 @@ export type CheckoutBrandingInput = {
   message?: string | null;
 };
 
-export type StoreFulfillmentSettings = {
+export const STORE_RULES_TITLE = 'store-rules';
+
+export type FulfillmentSettings = {
   storeId: string;
   deliveryEnabled: boolean;
   shippingCents: number;
@@ -18,14 +24,12 @@ export type StoreFulfillmentSettings = {
   orderNotifyPhoneE164: string | null;
 };
 
-export type StoreFulfillmentInput = {
+export type FulfillmentSettingsInput = {
   deliveryEnabled?: boolean;
   shippingCents?: number;
   pickupAddressText?: string | null;
   orderNotifyPhoneE164?: string | null;
 };
-
-export const STORE_RULES_TITLE = 'store-rules';
 
 export type StoreRules = {
   sobreNegocio?: string;
@@ -108,6 +112,78 @@ export class StoresService {
     };
   }
 
+  async getFulfillmentSettings(
+    tenantId: string,
+    storeId: string,
+  ): Promise<FulfillmentSettings> {
+    const store = await this.prisma.store.findFirst({
+      where: { id: storeId, tenantId },
+    });
+    if (!store) throw new NotFoundException('Loja não encontrada.');
+
+    return {
+      storeId: store.id,
+      deliveryEnabled: store.deliveryEnabled,
+      shippingCents: store.shippingCents,
+      pickupAddressText: store.pickupAddressText,
+      orderNotifyPhoneE164: store.orderNotifyPhoneE164,
+    };
+  }
+
+  async updateFulfillmentSettings(
+    tenantId: string,
+    storeId: string,
+    input: FulfillmentSettingsInput,
+  ): Promise<FulfillmentSettings> {
+    const store = await this.prisma.store.findFirst({
+      where: { id: storeId, tenantId },
+    });
+    if (!store) throw new NotFoundException('Loja não encontrada.');
+
+    let orderNotifyPhoneE164: string | null | undefined = undefined;
+    if (input.orderNotifyPhoneE164 !== undefined) {
+      const raw = input.orderNotifyPhoneE164?.trim() || '';
+      if (!raw) {
+        orderNotifyPhoneE164 = null;
+      } else {
+        const e164 = normalizePhoneBr(raw);
+        const digits = e164.replace(/\D/g, '');
+        if (digits.length < 12 || digits.length > 13) {
+          throw new BadRequestException('WhatsApp de aviso inválido.');
+        }
+        orderNotifyPhoneE164 = e164;
+      }
+    }
+
+    if (input.shippingCents !== undefined && input.shippingCents < 0) {
+      throw new BadRequestException('Frete inválido.');
+    }
+
+    const updated = await this.prisma.store.update({
+      where: { id: store.id },
+      data: {
+        ...(input.deliveryEnabled !== undefined
+          ? { deliveryEnabled: input.deliveryEnabled }
+          : {}),
+        ...(input.shippingCents !== undefined
+          ? { shippingCents: Math.floor(input.shippingCents) }
+          : {}),
+        ...(input.pickupAddressText !== undefined
+          ? { pickupAddressText: input.pickupAddressText?.trim() || null }
+          : {}),
+        ...(orderNotifyPhoneE164 !== undefined ? { orderNotifyPhoneE164 } : {}),
+      },
+    });
+
+    return {
+      storeId: updated.id,
+      deliveryEnabled: updated.deliveryEnabled,
+      shippingCents: updated.shippingCents,
+      pickupAddressText: updated.pickupAddressText,
+      orderNotifyPhoneE164: updated.orderNotifyPhoneE164,
+    };
+  }
+
   async updateCheckoutBranding(
     tenantId: string,
     storeId: string,
@@ -147,80 +223,6 @@ export class StoresService {
       secondaryColor: updated.checkoutSecondaryColor,
       fontFamily: updated.checkoutFontFamily ?? 'geist',
       message: updated.checkoutMessage,
-    };
-  }
-
-  async getFulfillment(
-    tenantId: string,
-    storeId: string,
-  ): Promise<StoreFulfillmentSettings> {
-    const store = await this.prisma.store.findFirst({
-      where: { id: storeId, tenantId },
-    });
-    if (!store) throw new NotFoundException('Loja não encontrada.');
-    return this.toFulfillmentView(store);
-  }
-
-  async updateFulfillment(
-    tenantId: string,
-    storeId: string,
-    input: StoreFulfillmentInput,
-  ): Promise<StoreFulfillmentSettings> {
-    const store = await this.prisma.store.findFirst({
-      where: { id: storeId, tenantId },
-    });
-    if (!store) throw new NotFoundException('Loja não encontrada.');
-
-    const pickupSource =
-      input.pickupAddressText !== undefined
-        ? input.pickupAddressText
-        : store.pickupAddressText;
-    const pickupAddressText = pickupSource?.trim() || '';
-    if (!pickupAddressText) {
-      throw new BadRequestException('Informe o endereço de retirada.');
-    }
-
-    const phoneSource =
-      input.orderNotifyPhoneE164 !== undefined
-        ? input.orderNotifyPhoneE164
-        : store.orderNotifyPhoneE164;
-    const orderNotifyPhoneE164 = parseBrMobileE164(phoneSource);
-    if (!orderNotifyPhoneE164) {
-      throw new BadRequestException(
-        'Informe o WhatsApp para avisos de pedido.',
-      );
-    }
-
-    const updated = await this.prisma.store.update({
-      where: { id: storeId },
-      data: {
-        pickupAddressText,
-        orderNotifyPhoneE164,
-        ...(input.deliveryEnabled !== undefined
-          ? { deliveryEnabled: input.deliveryEnabled }
-          : {}),
-        ...(input.shippingCents !== undefined
-          ? { shippingCents: input.shippingCents }
-          : {}),
-      },
-    });
-
-    return this.toFulfillmentView(updated);
-  }
-
-  private toFulfillmentView(store: {
-    id: string;
-    deliveryEnabled: boolean;
-    shippingCents: number;
-    pickupAddressText: string | null;
-    orderNotifyPhoneE164: string | null;
-  }): StoreFulfillmentSettings {
-    return {
-      storeId: store.id,
-      deliveryEnabled: store.deliveryEnabled,
-      shippingCents: store.shippingCents,
-      pickupAddressText: store.pickupAddressText,
-      orderNotifyPhoneE164: store.orderNotifyPhoneE164,
     };
   }
 }

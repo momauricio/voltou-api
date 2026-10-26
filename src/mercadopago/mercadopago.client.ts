@@ -13,6 +13,7 @@ export type MpTokenResponse = {
   user_id?: number;
   token_type?: string;
   scope?: string;
+  public_key?: string;
 };
 
 export type MpPreferenceResponse = {
@@ -21,30 +22,34 @@ export type MpPreferenceResponse = {
   sandbox_init_point?: string;
 };
 
-export type MpCreatePaymentInput = {
-  amountCents: number;
+export type MpPaymentCreateInput = {
+  transactionAmount: number;
   description: string;
   paymentMethodId: string;
-  payerEmail: string;
-  externalReference: string;
-  notificationUrl: string;
-  /** Voltou commission in cents — sent as MP application_fee (BRL). */
-  applicationFeeCents: number;
-  token?: string;
   installments?: number;
+  token?: string;
   issuerId?: string;
+  payerEmail: string;
   payerIdentification?: { type: string; number: string };
-  idempotencyKey: string;
+  externalReference: string;
+  applicationFee: number;
+  notificationUrl: string;
+  metadata?: Record<string, string>;
 };
 
-export type TransparentPaymentResult = {
-  paymentId: number;
+export type MpPaymentResponse = {
+  id: number;
   status: string;
-  statusDetail: string | null;
-  amountCents: number;
-  pixQrCode: string | null;
-  pixQrCodeBase64: string | null;
-  pixTicketUrl: string | null;
+  status_detail?: string;
+  external_reference?: string;
+  transaction_amount?: number;
+  point_of_interaction?: {
+    transaction_data?: {
+      qr_code?: string;
+      qr_code_base64?: string;
+      ticket_url?: string;
+    };
+  };
 };
 
 @Injectable()
@@ -218,39 +223,87 @@ export class MercadoPagoClient {
   }
 
   /**
-   * Checkout Transparente: POST /v1/payments.
-   * Always sends application_fee (Voltou commission). Never sends collector_id.
+   * Tenta obter a public_key do vendedor (necessária para Bricks).
+   * OAuth às vezes já devolve; senão consultamos endpoints auxiliares.
    */
+  async resolvePublicKey(
+    accessToken: string,
+    fromOauth?: string | null,
+  ): Promise<string | null> {
+    if (fromOauth?.trim()) return fromOauth.trim();
+
+    const attempts: Array<() => Promise<string | null>> = [
+      async () => {
+        const res = await fetch(`${API_BASE}/v1/plugins/configurations`, {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            Accept: 'application/json',
+          },
+        });
+        if (!res.ok) return null;
+        const data = (await res.json().catch(() => null)) as
+          | { public_key?: string }
+          | Array<{ public_key?: string }>
+          | null;
+        if (Array.isArray(data)) {
+          return data.find((x) => x.public_key)?.public_key?.trim() ?? null;
+        }
+        return data?.public_key?.trim() ?? null;
+      },
+      async () => {
+        const res = await fetch(`${API_BASE}/users/me`, {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            Accept: 'application/json',
+          },
+        });
+        if (!res.ok) return null;
+        const data = (await res.json().catch(() => null)) as {
+          public_key?: string;
+        } | null;
+        return data?.public_key?.trim() ?? null;
+      },
+    ];
+
+    for (const attempt of attempts) {
+      try {
+        const key = await attempt();
+        if (key) return key;
+      } catch {
+        /* try next */
+      }
+    }
+    return null;
+  }
+
   async createPayment(
     accessToken: string,
-    input: MpCreatePaymentInput,
-  ): Promise<TransparentPaymentResult> {
-    const method = input.paymentMethodId.trim().toLowerCase();
-    const payer: Record<string, unknown> = { email: input.payerEmail.trim() };
-    if (input.payerIdentification?.type && input.payerIdentification.number) {
-      payer.identification = {
-        type: input.payerIdentification.type,
-        number: input.payerIdentification.number,
-      };
-    }
-
+    input: MpPaymentCreateInput,
+    idempotencyKey: string,
+  ): Promise<MpPaymentResponse> {
     const body: Record<string, unknown> = {
-      transaction_amount: Number((input.amountCents / 100).toFixed(2)),
-      description: input.description.slice(0, 256),
-      payment_method_id: method,
-      payer,
+      transaction_amount: Number(input.transactionAmount.toFixed(2)),
+      description: input.description.slice(0, 255),
+      payment_method_id: input.paymentMethodId,
+      installments: input.installments ?? 1,
+      payer: {
+        email: input.payerEmail,
+      },
       external_reference: input.externalReference,
+application_fee: Number(input.applicationFee.toFixed(2)),
       notification_url: input.notificationUrl,
-      application_fee: Number((input.applicationFeeCents / 100).toFixed(2)),
+      metadata: input.metadata ?? {},
     };
 
-    if (method !== 'pix' && input.token) {
+    if (input.token) {
       body.token = input.token;
-      body.installments =
-        input.installments && input.installments > 0 ? input.installments : 1;
-      if (input.issuerId) {
-        body.issuer_id = input.issuerId;
-      }
+    }
+    if (input.issuerId) {
+      body.issuer_id = input.issuerId;
+    }
+    if (input.payerIdentification) {
+      (body.payer as Record<string, unknown>).identification =
+        input.payerIdentification;
     }
 
     const res = await fetch(`${API_BASE}/v1/payments`, {
@@ -259,29 +312,19 @@ export class MercadoPagoClient {
         Authorization: `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
         Accept: 'application/json',
-        'X-Idempotency-Key': input.idempotencyKey,
+        'X-Idempotency-Key': idempotencyKey,
       },
       body: JSON.stringify(body),
     });
 
-    const data = (await res.json().catch(() => ({}))) as {
-      id?: number | string;
-      status?: string;
-      status_detail?: string;
-      point_of_interaction?: {
-        transaction_data?: {
-          qr_code?: string;
-          qr_code_base64?: string;
-          ticket_url?: string;
-        };
-      };
+    const data = (await res.json().catch(() => ({}))) as MpPaymentResponse & {
       message?: string;
       error?: string;
-      cause?: { description?: string }[];
+      cause?: Array<{ description?: string; code?: string }>;
     };
 
-    if (!res.ok || data.id == null) {
-      const cause = data.cause?.find((c) => c.description)?.description;
+    if (!res.ok || !data.id) {
+      const cause = data.cause?.[0]?.description;
       throw new Error(
         cause ||
           data.message ||
@@ -290,16 +333,7 @@ export class MercadoPagoClient {
       );
     }
 
-    const td = data.point_of_interaction?.transaction_data;
-    return {
-      paymentId: Number(data.id),
-      status: String(data.status ?? ''),
-      statusDetail: data.status_detail ?? null,
-      amountCents: input.amountCents,
-      pixQrCode: td?.qr_code ?? null,
-      pixQrCodeBase64: td?.qr_code_base64 ?? null,
-      pixTicketUrl: td?.ticket_url ?? null,
-    };
+    return data;
   }
 
   async getPayment(accessToken: string, paymentId: string) {

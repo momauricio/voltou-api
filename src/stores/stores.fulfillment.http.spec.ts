@@ -21,7 +21,7 @@ function ownerJwt() {
   });
 }
 
-describe('PATCH /stores/fulfillment (required fields)', () => {
+describe('PATCH /stores/fulfillment (prod rules)', () => {
   let app: INestApplication;
   const storeRow = {
     id: storeId,
@@ -76,7 +76,9 @@ describe('PATCH /stores/fulfillment (required fields)', () => {
       })
       .expect(400);
 
-    expect(JSON.stringify(res.body)).toMatch(/retirada|endereço|endereco/i);
+    expect(res.body.message).toBe(
+      'Endereco de retirada e telefone de aviso sao obrigatorios',
+    );
     expect(prisma.store.update).not.toHaveBeenCalled();
   });
 
@@ -92,7 +94,9 @@ describe('PATCH /stores/fulfillment (required fields)', () => {
       })
       .expect(400);
 
-    expect(JSON.stringify(res.body)).toMatch(/whatsapp|aviso|telefone/i);
+    expect(res.body.message).toBe(
+      'Endereco de retirada e telefone de aviso sao obrigatorios',
+    );
     expect(prisma.store.update).not.toHaveBeenCalled();
   });
 
@@ -127,6 +131,79 @@ describe('PATCH /stores/fulfillment (required fields)', () => {
       storeId,
       pickupAddressText: 'Rua Exemplo, 100 — Centro',
       orderNotifyPhoneE164: '+5511987654321',
+    });
+  });
+
+  function patch(body: Record<string, unknown>) {
+    return request(app.getHttpServer())
+      .patch('/stores/fulfillment')
+      .set('Authorization', `Bearer ${ownerJwt()}`)
+      .send({ tenantId: ownerTenant, storeId, ...body });
+  }
+
+  it('requires both fields in the body even if the store already has them saved', async () => {
+    const res = await patch({ deliveryEnabled: false }).expect(400);
+    expect(res.body.message).toBe(
+      'Endereco de retirada e telefone de aviso sao obrigatorios',
+    );
+    expect(prisma.store.update).not.toHaveBeenCalled();
+  });
+
+  it('accepts a landline (normalizePhoneBr, 12 digits)', async () => {
+    await patch({
+      pickupAddressText: 'Rua A, 1',
+      orderNotifyPhoneE164: '(11) 3333-4444',
+    }).expect(200);
+    expect(prisma.store.update).toHaveBeenCalledWith({
+      where: { id: storeId },
+      data: { pickupAddressText: 'Rua A, 1', orderNotifyPhoneE164: '+551133334444' },
+    });
+  });
+
+  it('rejects a phone that does not normalize to 12–13 digits', async () => {
+    const res = await patch({
+      pickupAddressText: 'Rua A, 1',
+      orderNotifyPhoneE164: '12345',
+    }).expect(400);
+    expect(res.body.message).toBe('WhatsApp de aviso inválido.');
+  });
+
+  it('caps pickupAddressText at 500 and the phone at 20 characters', async () => {
+    await patch({
+      pickupAddressText: 'x'.repeat(501),
+      orderNotifyPhoneE164: '11987654321',
+    }).expect(400);
+    await patch({
+      pickupAddressText: 'Rua A, 1',
+      orderNotifyPhoneE164: '1'.repeat(21),
+    }).expect(400);
+    expect(prisma.store.update).not.toHaveBeenCalled();
+  });
+
+  it('returns zod errors as a joined string', async () => {
+    const res = await patch({
+      pickupAddressText: 'Rua A, 1',
+      orderNotifyPhoneE164: '11987654321',
+      shippingCents: -1,
+    }).expect(400);
+    expect(typeof res.body.message).toBe('string');
+  });
+
+  it('updates delivery and shipping alongside the required fields', async () => {
+    await patch({
+      pickupAddressText: 'Rua A, 1',
+      orderNotifyPhoneE164: '+55 11 98765-4321',
+      deliveryEnabled: false,
+      shippingCents: 1500,
+    }).expect(200);
+    expect(prisma.store.update).toHaveBeenCalledWith({
+      where: { id: storeId },
+      data: {
+        deliveryEnabled: false,
+        shippingCents: 1500,
+        pickupAddressText: 'Rua A, 1',
+        orderNotifyPhoneE164: '+5511987654321',
+      },
     });
   });
 });

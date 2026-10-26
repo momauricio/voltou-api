@@ -6,9 +6,14 @@ import { MercadoPagoModule } from '../mercadopago/mercadopago.module';
 import { MercadoPagoService } from '../mercadopago/mercadopago.service';
 import { PAYMENT_PROVIDER } from './payment-provider';
 import { EmailModule } from '../email/email.module';
+import { WhatsAppModule } from '../whatsapp/whatsapp.module';
 
 @Module({
-  imports: [forwardRef(() => MercadoPagoModule), EmailModule],
+  imports: [
+    forwardRef(() => MercadoPagoModule),
+    EmailModule,
+    WhatsAppModule,
+  ],
   controllers: [CheckoutController, OffersController],
   providers: [
     CheckoutService,

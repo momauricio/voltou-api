@@ -439,7 +439,7 @@ export class AuthService {
     let i = 1;
     while (
       (await this.prisma.tenant.findUnique({ where: { slug } })) ||
-      (await this.prisma.store.findUnique({ where: { slug } }))
+      (await this.prisma.store.findFirst({ where: { slug } }))
     ) {
       slug = `${baseSlug}-${i++}`;
     }

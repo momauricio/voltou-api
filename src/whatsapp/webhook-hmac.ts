@@ -1,73 +1,46 @@
 import { UnauthorizedException } from '@nestjs/common';
 import { createHmac, timingSafeEqual } from 'crypto';
 
-/** WAHA documents WHATSAPP_HOOK_HMAC_KEY; WAHA_WEBHOOK_SECRET is an alias. */
-export function resolveWhatsAppWebhookSecret(
-  env: NodeJS.ProcessEnv = process.env,
-): string {
-  return (
-    env.WHATSAPP_HOOK_HMAC_KEY?.trim() ||
-    env.WAHA_WEBHOOK_SECRET?.trim() ||
-    ''
-  );
-}
-
 function headerValue(
-  headers: Record<string, string | string[] | undefined>,
+  headers: Record<string, string | string[] | undefined> | undefined,
   name: string,
 ): string | undefined {
-  const key = Object.keys(headers).find(
-    (k) => k.toLowerCase() === name.toLowerCase(),
-  );
-  if (!key) return undefined;
-  const v = headers[key];
-  return Array.isArray(v) ? v[0] : v;
-}
-
-function safeEqualHex(expected: string, provided: string): boolean {
-  const a = Buffer.from(expected, 'utf8');
-  const b = Buffer.from(provided, 'utf8');
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(a, b);
+  if (!headers) return undefined;
+  const value =
+    headers[name] ?? headers[name.toLowerCase()] ?? headers[name.toUpperCase()];
+  return Array.isArray(value) ? value[0] : value;
 }
 
 /**
  * WAHA signs the raw POST body with HMAC-SHA512 and sends X-Webhook-Hmac.
- * Production requires a shared secret; unsigned notifications are refused.
+ * Secret: WHATSAPP_HOOK_HMAC_KEY (main.ts may load it from
+ * /app/.whatsapp-hook-hmac-key) or WAHA_WEBHOOK_SECRET.
  */
-export function assertWhatsAppWebhookHmac(input: {
-  headers: Record<string, string | string[] | undefined>;
-  rawBody?: Buffer | string | null;
-  env?: NodeJS.ProcessEnv;
+export function assertWhatsAppWebhookHmac({
+  headers,
+  rawBody,
+}: {
+  headers?: Record<string, string | string[] | undefined>;
+  rawBody?: unknown;
 }): void {
-  const env = input.env ?? process.env;
-  const secret = resolveWhatsAppWebhookSecret(env);
-  const isProd = (env.NODE_ENV ?? '').toLowerCase() === 'production';
-
+  const secret = (
+    process.env.WHATSAPP_HOOK_HMAC_KEY ||
+    process.env.WAHA_WEBHOOK_SECRET ||
+    ''
+  ).trim();
   if (!secret) {
-    if (isProd) {
+    if (process.env.NODE_ENV === 'production')
       throw new UnauthorizedException(
-        'Webhook WhatsApp sem segredo compartilhado.',
+        'Webhook WhatsApp sem segredo configurado.',
       );
-    }
     return;
   }
-
-  const provided = headerValue(input.headers, 'x-webhook-hmac');
-  if (!provided) {
-    throw new UnauthorizedException('Assinatura HMAC do webhook ausente.');
-  }
-
-  if (input.rawBody == null) {
-    throw new UnauthorizedException('Corpo bruto do webhook ausente.');
-  }
-
-  const raw =
-    typeof input.rawBody === 'string'
-      ? Buffer.from(input.rawBody)
-      : input.rawBody;
-  const expected = createHmac('sha512', secret).update(raw).digest('hex');
-  if (!safeEqualHex(expected, provided)) {
-    throw new UnauthorizedException('Assinatura HMAC do webhook inválida.');
-  }
+  if (!Buffer.isBuffer(rawBody))
+    throw new UnauthorizedException('Assinatura do webhook WhatsApp inválida.');
+  const provided = String(headerValue(headers, 'x-webhook-hmac') || '').trim();
+  const expected = createHmac('sha512', secret).update(rawBody).digest('hex');
+  const a = Buffer.from(provided, 'utf8');
+  const b = Buffer.from(expected, 'utf8');
+  if (a.length !== b.length || !timingSafeEqual(a, b))
+    throw new UnauthorizedException('Assinatura do webhook WhatsApp inválida.');
 }

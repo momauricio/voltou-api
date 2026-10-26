@@ -7,9 +7,8 @@ import {
   Post,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
+import { PUBLIC_PAY_THROTTLE } from '../security/rate-limits';
 import { Public } from '../auth/public.decorator';
-import { publicPayThrottle } from '../security/rate-limits';
-import { createTransparentOfferPaymentSchema } from '../shared/schemas';
 import { CheckoutService } from './checkout.service';
 
 @Controller('offers')
@@ -29,7 +28,7 @@ export class OffersController {
   }
 
   @Public()
-  @Throttle(publicPayThrottle)
+  @Throttle(PUBLIC_PAY_THROTTLE)
   @Post('public/:storeSlug/:coupon/pay')
   pay(
     @Param('storeSlug') storeSlug: string,
@@ -49,28 +48,55 @@ export class OffersController {
     );
   }
 
+  /** Checkout Transparente (Payment Brick): cartão ou Pix via /v1/payments. */
   @Public()
-  @Throttle(publicPayThrottle)
   @Post('public/:storeSlug/:coupon/payments')
   createPayment(
     @Param('storeSlug') storeSlug: string,
     @Param('coupon') coupon: string,
-    @Body() body: unknown,
+    @Body()
+    body: {
+      selectedAddonIds?: string[];
+      paymentMethodId?: string;
+      token?: string;
+      installments?: number;
+      issuerId?: string | number;
+      payerEmail?: string;
+      payerIdentification?: { type: string; number: string };
+      fulfillmentMethod?: string;
+      shippingAddress?: unknown;
+    },
   ) {
     if (!storeSlug?.trim() || !coupon?.trim()) {
       throw new BadRequestException('slug e cupom são obrigatórios.');
     }
-    const parsed = createTransparentOfferPaymentSchema.safeParse(body ?? {});
-    if (!parsed.success) {
+    if (!body?.paymentMethodId?.trim()) {
+      throw new BadRequestException('paymentMethodId é obrigatório.');
+    }
+    if (!body?.payerEmail?.trim()) {
+      throw new BadRequestException('payerEmail é obrigatório.');
+    }
+    if (
+      body?.fulfillmentMethod !== 'pickup' &&
+      body?.fulfillmentMethod !== 'delivery'
+    ) {
       throw new BadRequestException(
-        parsed.error.issues.map((i) => i.message).join(', '),
+        'Escolha retirar na loja ou receber em casa.',
       );
     }
-    return this.checkoutService.createPublicPayment(
-      storeSlug,
-      coupon,
-      parsed.data,
-    );
+    return this.checkoutService.createTransparentPayment(storeSlug, coupon, {
+      selectedAddonIds: Array.isArray(body.selectedAddonIds)
+        ? body.selectedAddonIds
+        : [],
+      paymentMethodId: body.paymentMethodId,
+      token: body.token,
+      installments: body.installments,
+      issuerId: body.issuerId != null ? String(body.issuerId) : undefined,
+      payerEmail: body.payerEmail,
+      payerIdentification: body.payerIdentification,
+      fulfillmentMethod: body.fulfillmentMethod,
+      shippingAddress: body.shippingAddress,
+    });
   }
 
   @Public()

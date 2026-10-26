@@ -58,7 +58,10 @@ describe('WhatsApp webhook (http)', () => {
     await request(app.getHttpServer())
       .post('/whatsapp/webhook')
       .send({ event: 'message' })
-      .expect(401);
+      .expect(401)
+      .expect((res) => {
+        expect(res.body.message).toBe('Webhook WhatsApp sem segredo configurado.');
+      });
     expect(whatsapp.handleWebhook).not.toHaveBeenCalled();
   });
 
@@ -75,8 +78,12 @@ describe('WhatsApp webhook (http)', () => {
     expect(whatsapp.handleWebhook).not.toHaveBeenCalled();
   });
 
-  it('accepts a valid HMAC and forwards the body', async () => {
+  // Prod parity (see TODO(mauricio) in whatsapp.controller.ts): the handler
+  // only receives @Body(), so rawBody is never available and a configured
+  // secret makes every webhook 401 — even with a correct HMAC.
+  it('returns 401 even with a valid HMAC while a secret is configured (prod behavior)', async () => {
     const secret = 'shared-secret';
+    process.env.NODE_ENV = 'test';
     process.env.WHATSAPP_HOOK_HMAC_KEY = secret;
     await boot();
 
@@ -84,11 +91,27 @@ describe('WhatsApp webhook (http)', () => {
     const raw = JSON.stringify(payload);
     const hmac = createHmac('sha512', secret).update(raw).digest('hex');
 
-    await request(app.getHttpServer())
+    const res = await request(app.getHttpServer())
       .post('/whatsapp/webhook')
       .set('Content-Type', 'application/json')
       .set('X-Webhook-Hmac', hmac)
       .send(raw)
+      .expect(401);
+
+    expect(res.body.message).toBe('Assinatura do webhook WhatsApp inválida.');
+    expect(whatsapp.handleWebhook).not.toHaveBeenCalled();
+  });
+
+  it('forwards the body outside production when no secret is configured', async () => {
+    process.env.NODE_ENV = 'test';
+    delete process.env.WHATSAPP_HOOK_HMAC_KEY;
+    delete process.env.WAHA_WEBHOOK_SECRET;
+    await boot();
+
+    const payload = { event: 'message', session: 'default' };
+    await request(app.getHttpServer())
+      .post('/whatsapp/webhook')
+      .send(payload)
       .expect(201);
 
     expect(whatsapp.handleWebhook).toHaveBeenCalledWith(payload);

@@ -39,8 +39,8 @@ model Store {
   id        String   @id @default(uuid())
   tenantId  String
   name      String
-  /// Globally unique public path segment for /loja/:storeSlug/:coupon
-  slug      String   @unique
+  /// Public path segment for /loja/:storeSlug/:coupon (unique per tenant via @@unique)
+  slug      String
   timezone  String   @default("America/Sao_Paulo")
   /// mercadopago | infinitepay (futuro) | stub
   preferredCheckoutProvider String @default("mercadopago")
@@ -275,6 +275,14 @@ model Checkout {
   fulfillmentMethod String?
   /// Optional carrier tracking code (entrega only). Max 120 at the API layer.
   trackingCode      String?
+  /// Fixed shipping charged on this order in cents (0 for pickup). Commission excludes it.
+  shippingCents       Int       @default(0)
+  /// JSON shipping address (delivery only)
+  shippingAddressJson String?
+  /// awaiting | ready | shipped | done | null (until paid)
+  fulfillmentStatus   String?
+  /// Set once the merchant WhatsApp order alert was sent
+  orderNotifiedAt     DateTime?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
@@ -480,6 +488,8 @@ model MercadoPagoConnection {
   status          String    @default("connected")
   mpUserId        String?
   accountLabel    String?
+  /// Seller public key (Checkout Bricks / transparent). Not a secret.
+  publicKey       String?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 

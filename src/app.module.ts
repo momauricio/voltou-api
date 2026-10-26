@@ -24,9 +24,6 @@ import { MetricsModule } from './metrics/metrics.module';
 
 @Module({
   imports: [
-    ThrottlerModule.forRoot({
-      throttlers: [{ name: 'default', ttl: 60_000, limit: 300 }],
-    }),
     PrismaModule,
     AuthModule,
     TenantsModule,
@@ -43,6 +40,9 @@ import { MetricsModule } from './metrics/metrics.module';
     MercadoPagoModule,
     MetricsModule,
     StaffModule,
+    ThrottlerModule.forRoot({
+      throttlers: [{ name: 'default', ttl: 60000, limit: 300 }],
+    }),
   ],
   controllers: [AppController],
   providers: [

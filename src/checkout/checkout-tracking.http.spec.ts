@@ -7,6 +7,7 @@ import { RolesGuard } from '../auth/roles.guard';
 import { signAccessToken } from '../auth/crypto.util';
 import { EmailService } from '../email/email.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { WhatsAppService } from '../whatsapp/whatsapp.service';
 import { CheckoutController } from './checkout.controller';
 import { CheckoutService } from './checkout.service';
 
@@ -40,6 +41,9 @@ function paidCheckout(overrides: Record<string, unknown> = {}) {
     paidLinesJson: null,
     trackingCode: null,
     fulfillmentMethod: 'delivery',
+    fulfillmentStatus: 'awaiting',
+    shippingCents: 0,
+    shippingAddressJson: null,
     customer: { displayName: 'Ana Souza' },
     ...overrides,
   };
@@ -53,6 +57,8 @@ describe('owner checkout trackingCode (http)', () => {
       findFirst: jest.fn(),
       update: jest.fn(),
     },
+    $queryRawUnsafe: jest.fn(),
+    $executeRawUnsafe: jest.fn(),
   };
 
   beforeAll(async () => {
@@ -62,6 +68,7 @@ describe('owner checkout trackingCode (http)', () => {
         CheckoutService,
         { provide: PrismaService, useValue: prisma },
         { provide: EmailService, useValue: { sendPaymentReceived: jest.fn() } },
+        { provide: WhatsAppService, useValue: { send: jest.fn() } },
         { provide: APP_GUARD, useClass: AccessTokenGuard },
         { provide: APP_GUARD, useClass: RolesGuard },
       ],
@@ -80,8 +87,9 @@ describe('owner checkout trackingCode (http)', () => {
   });
 
   it('GET /checkouts/orders returns trackingCode for the owner tenant', async () => {
-    prisma.checkout.findMany.mockResolvedValue([
-      paidCheckout({ trackingCode: 'BR123456789BR' }),
+    prisma.checkout.findMany.mockResolvedValue([paidCheckout()]);
+    prisma.$queryRawUnsafe.mockResolvedValue([
+      { id: checkoutId, trackingCode: 'BR123456789BR' },
     ]);
 
     const res = await request(app.getHttpServer())
@@ -90,14 +98,17 @@ describe('owner checkout trackingCode (http)', () => {
       .set('Authorization', `Bearer ${jwt('owner')}`)
       .expect(200);
 
-    expect(prisma.checkout.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: expect.objectContaining({
-          tenantId: ownerTenant,
-          storeId,
-          status: 'paid',
-        }),
-      }),
+    expect(prisma.checkout.findMany).toHaveBeenCalledWith({
+      where: { tenantId: ownerTenant, storeId, status: 'paid' },
+      include: { customer: true },
+      orderBy: { paidAt: 'desc' },
+      take: 100,
+    });
+    expect(prisma.$queryRawUnsafe).toHaveBeenCalledWith(
+      'SELECT id, trackingCode FROM Checkout WHERE tenantId = ? AND storeId = ? AND status = ?',
+      ownerTenant,
+      storeId,
+      'paid',
     );
     expect(res.body).toEqual(
       expect.arrayContaining([
@@ -105,9 +116,35 @@ describe('owner checkout trackingCode (http)', () => {
           id: checkoutId,
           trackingCode: 'BR123456789BR',
           fulfillmentMethod: 'delivery',
+          fulfillmentStatus: 'awaiting',
+          shippingCents: 0,
+          shippingAddress: null,
           customerName: 'Ana Souza',
         }),
       ]),
+    );
+  });
+
+  it('GET /checkouts/orders filters by ?fulfillmentStatus', async () => {
+    prisma.checkout.findMany.mockResolvedValue([]);
+    prisma.$queryRawUnsafe.mockResolvedValue([]);
+
+    await request(app.getHttpServer())
+      .get('/checkouts/orders')
+      .query({ tenantId: ownerTenant, storeId, fulfillmentStatus: 'ready' })
+      .set('Authorization', `Bearer ${jwt('owner')}`)
+      .expect(200);
+
+    expect(prisma.checkout.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          tenantId: ownerTenant,
+          storeId,
+          status: 'paid',
+          fulfillmentStatus: 'ready',
+        },
+        take: 100,
+      }),
     );
   });
 
@@ -132,9 +169,6 @@ describe('owner checkout trackingCode (http)', () => {
     prisma.checkout.findFirst.mockResolvedValue(
       paidCheckout({ fulfillmentMethod: null }),
     );
-    prisma.checkout.update.mockResolvedValue(
-      paidCheckout({ fulfillmentMethod: null, trackingCode: 'ABC123' }),
-    );
 
     const res = await request(app.getHttpServer())
       .patch(`/checkouts/${checkoutId}/fulfillment`)
@@ -146,15 +180,16 @@ describe('owner checkout trackingCode (http)', () => {
       })
       .expect(200);
 
-    expect(prisma.checkout.update).toHaveBeenCalled();
+    expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
+      'UPDATE Checkout SET trackingCode = ? WHERE id = ?',
+      'ABC123',
+      checkoutId,
+    );
     expect(res.body.trackingCode).toBe('ABC123');
   });
 
   it('PATCH /checkouts/:id/fulfillment sets trackingCode on delivery', async () => {
     prisma.checkout.findFirst.mockResolvedValue(paidCheckout());
-    prisma.checkout.update.mockResolvedValue(
-      paidCheckout({ trackingCode: 'BR123456789BR' }),
-    );
 
     const res = await request(app.getHttpServer())
       .patch(`/checkouts/${checkoutId}/fulfillment`)
@@ -167,11 +202,10 @@ describe('owner checkout trackingCode (http)', () => {
       })
       .expect(200);
 
-    expect(prisma.checkout.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { id: checkoutId },
-        data: expect.objectContaining({ trackingCode: 'BR123456789BR' }),
-      }),
+    expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
+      'UPDATE Checkout SET trackingCode = ? WHERE id = ?',
+      'BR123456789BR',
+      checkoutId,
     );
     expect(res.body).toEqual(
       expect.objectContaining({
@@ -185,7 +219,6 @@ describe('owner checkout trackingCode (http)', () => {
     prisma.checkout.findFirst.mockResolvedValue(
       paidCheckout({ trackingCode: 'OLD' }),
     );
-    prisma.checkout.update.mockResolvedValue(paidCheckout({ trackingCode: null }));
 
     const res = await request(app.getHttpServer())
       .patch(`/checkouts/${checkoutId}/fulfillment`)
@@ -197,10 +230,10 @@ describe('owner checkout trackingCode (http)', () => {
       })
       .expect(200);
 
-    expect(prisma.checkout.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({ trackingCode: null }),
-      }),
+    expect(prisma.$executeRawUnsafe).toHaveBeenCalledWith(
+      'UPDATE Checkout SET trackingCode = ? WHERE id = ?',
+      null,
+      checkoutId,
     );
     expect(res.body.trackingCode).toBeNull();
   });
@@ -220,8 +253,10 @@ describe('owner checkout trackingCode (http)', () => {
       })
       .expect(400);
 
-    expect(JSON.stringify(res.body)).toMatch(/entrega|rastreio/i);
-    expect(prisma.checkout.update).not.toHaveBeenCalled();
+    expect(res.body.message).toBe(
+      'Tracking code is only allowed for delivery orders',
+    );
+    expect(prisma.$executeRawUnsafe).not.toHaveBeenCalled();
   });
 
   it('PATCH rejects trackingCode on retirada', async () => {
@@ -239,7 +274,7 @@ describe('owner checkout trackingCode (http)', () => {
       })
       .expect(400);
 
-    expect(prisma.checkout.update).not.toHaveBeenCalled();
+    expect(prisma.$executeRawUnsafe).not.toHaveBeenCalled();
   });
 
   it('PATCH does not update a checkout from another tenant', async () => {
@@ -264,7 +299,7 @@ describe('owner checkout trackingCode (http)', () => {
         }),
       }),
     );
-    expect(prisma.checkout.update).not.toHaveBeenCalled();
+    expect(prisma.$executeRawUnsafe).not.toHaveBeenCalled();
   });
 
   it('PATCH forbids another tenantId on owner JWT', async () => {
@@ -278,7 +313,7 @@ describe('owner checkout trackingCode (http)', () => {
       })
       .expect(403);
     expect(prisma.checkout.findFirst).not.toHaveBeenCalled();
-    expect(prisma.checkout.update).not.toHaveBeenCalled();
+    expect(prisma.$executeRawUnsafe).not.toHaveBeenCalled();
   });
 
   it('PATCH does not set trackingCode on a pending checkout', async () => {
@@ -303,7 +338,7 @@ describe('owner checkout trackingCode (http)', () => {
         }),
       }),
     );
-    expect(prisma.checkout.update).not.toHaveBeenCalled();
+    expect(prisma.$executeRawUnsafe).not.toHaveBeenCalled();
   });
 
   it('PATCH is 401 without a token', async () => {
@@ -315,7 +350,7 @@ describe('owner checkout trackingCode (http)', () => {
         trackingCode: 'BR123',
       })
       .expect(401);
-    expect(prisma.checkout.update).not.toHaveBeenCalled();
+    expect(prisma.$executeRawUnsafe).not.toHaveBeenCalled();
   });
 
   it('PATCH rejects trackingCode longer than 120', async () => {
@@ -329,8 +364,67 @@ describe('owner checkout trackingCode (http)', () => {
         storeId,
         trackingCode: 'x'.repeat(121),
       })
+      .expect(400)
+      .expect((res) => {
+        expect(res.body.message).toBe('Tracking code exceeds 120 characters');
+      });
+
+    expect(prisma.$executeRawUnsafe).not.toHaveBeenCalled();
+  });
+
+  it('PATCH rejects a non-string trackingCode', async () => {
+    const res = await request(app.getHttpServer())
+      .patch(`/checkouts/${checkoutId}/fulfillment`)
+      .set('Authorization', `Bearer ${jwt('owner')}`)
+      .send({ tenantId: ownerTenant, storeId, trackingCode: 123 })
       .expect(400);
 
-    expect(prisma.checkout.update).not.toHaveBeenCalled();
+    expect(res.body.message).toBe('Invalid tracking code');
+    expect(prisma.checkout.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('PATCH falls back to the JWT tenant when body.tenantId is missing', async () => {
+    prisma.checkout.findFirst.mockResolvedValue(paidCheckout());
+
+    await request(app.getHttpServer())
+      .patch(`/checkouts/${checkoutId}/fulfillment`)
+      .set('Authorization', `Bearer ${jwt('owner')}`)
+      .send({ storeId, trackingCode: 'BR1' })
+      .expect(200);
+
+    expect(prisma.checkout.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ tenantId: ownerTenant }),
+      }),
+    );
+  });
+
+  it('PATCH 404 uses the prod wording', async () => {
+    prisma.checkout.findFirst.mockResolvedValue(null);
+
+    const res = await request(app.getHttpServer())
+      .patch(`/checkouts/${checkoutId}/fulfillment`)
+      .set('Authorization', `Bearer ${jwt('owner')}`)
+      .send({ tenantId: ownerTenant, storeId, trackingCode: 'BR1' })
+      .expect(404);
+
+    expect(res.body.message).toBe('Pedido nao encontrado.');
+  });
+
+  it('PATCH never returns customer phoneEnc/phoneHash (intentional fix vs prod)', async () => {
+    prisma.checkout.findFirst.mockResolvedValue(paidCheckout());
+
+    const res = await request(app.getHttpServer())
+      .patch(`/checkouts/${checkoutId}/fulfillment`)
+      .set('Authorization', `Bearer ${jwt('owner')}`)
+      .send({ tenantId: ownerTenant, storeId, trackingCode: 'BR1' })
+      .expect(200);
+
+    expect(prisma.checkout.findFirst).toHaveBeenCalledWith({
+      where: { id: checkoutId, tenantId: ownerTenant, status: 'paid', storeId },
+      include: { customer: { omit: { phoneEnc: true, phoneHash: true } } },
+    });
+    expect(res.body.customer).not.toHaveProperty('phoneEnc');
+    expect(res.body.customer).not.toHaveProperty('phoneHash');
   });
 });

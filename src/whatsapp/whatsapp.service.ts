@@ -1,4 +1,4 @@
-﻿import {
+import {
   BadRequestException,
   Injectable,
   Logger,
@@ -12,7 +12,6 @@ import { WHATSAPP_PROVIDER } from './whatsapp.constants';
 import type { WhatsAppProvider } from './whatsapp-provider.interface';
 import { Inject } from '@nestjs/common';
 import { hashPhone, normalizePhoneBr } from '../common/phone.util';
-import { resolveWhatsAppWebhookSecret } from './webhook-hmac';
 
 function mapUiStatus(status: string): 'Conectado' | 'Aguardando' | 'Desconectado' {
   if (status === 'WORKING') return 'Conectado';
@@ -98,13 +97,11 @@ export class WhatsAppService implements OnModuleInit {
   private webhookConfig() {
     const url = this.webhookUrl();
     if (!url) return undefined;
-    const hmacKey = resolveWhatsAppWebhookSecret();
     return {
       webhooks: [
         {
           url,
           events: ['message'],
-          ...(hmacKey ? { hmac: { key: hmacKey } } : {}),
         },
       ],
     };

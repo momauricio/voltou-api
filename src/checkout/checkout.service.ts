@@ -8,17 +8,15 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import {
-  CreateCheckoutInput,
-  type UpdateCheckoutFulfillmentInput,
-  CreateTransparentOfferPaymentInput,
-} from '../shared/schemas';
+import { CreateCheckoutInput } from '../shared/schemas';
 import { randomBytes, randomUUID } from 'crypto';
 import {
   PAYMENT_PROVIDER,
   type PaymentProvider,
 } from './payment-provider';
 import { EmailService } from '../email/email.service';
+import { WhatsAppService } from '../whatsapp/whatsapp.service';
+import { MercadoPagoService } from '../mercadopago/mercadopago.service';
 import {
   STORE_RULES_TITLE,
   type StoreRules,
@@ -45,6 +43,13 @@ import {
   findMissingPaidLines,
 } from './mark-paid-sales';
 import {
+  computePaymentAmounts,
+  parseShippingAddress,
+  resolveShippingCents,
+  serializeShippingAddress,
+  type ShippingAddress,
+} from './fulfillment';
+import {
   assertTrackingAllowed,
   normalizeTrackingCode,
 } from './checkout-tracking';
@@ -56,9 +61,12 @@ export class CheckoutService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly email: EmailService,
+    private readonly whatsapp: WhatsAppService,
     @Optional()
     @Inject(PAYMENT_PROVIDER)
     private readonly paymentProvider?: PaymentProvider,
+    @Optional()
+    private readonly mercadoPago?: MercadoPagoService,
   ) {}
 
   health() {
@@ -69,57 +77,9 @@ export class CheckoutService {
     };
   }
 
-  /** Paid checkouts for the lojista Pedidos panel (`GET /checkouts/orders`). */
-  async listOrders(tenantId: string, storeId: string) {
-    const rows = await this.prisma.checkout.findMany({
-      where: { tenantId, storeId, status: 'paid' },
-      include: { customer: { select: { displayName: true } } },
-      orderBy: { paidAt: 'desc' },
-    });
-    return rows.map((row) => this.toMerchantOrder(row));
-  }
-
-  /**
-   * Owner sets/clears `trackingCode` on their tenant's checkout.
-   * Only home delivery (`delivery` / `home` / `entrega`). Pickup is rejected.
-   */
-  async updateFulfillment(
-    checkoutId: string,
-    tenantId: string,
-    input: UpdateCheckoutFulfillmentInput,
-  ) {
-    const checkout = await this.prisma.checkout.findFirst({
-      where: {
-        id: checkoutId,
-        tenantId,
-        status: 'paid',
-        ...(input.storeId ? { storeId: input.storeId } : {}),
-      },
-      include: { customer: { select: { displayName: true } } },
-    });
-    if (!checkout) throw new NotFoundException('Pedido não encontrado.');
-
-    if (input.trackingCode === undefined) {
-      return this.toMerchantOrder(checkout);
-    }
-
-    assertTrackingAllowed(checkout.fulfillmentMethod);
-    const trackingCode = normalizeTrackingCode(input.trackingCode);
-    const updated = await this.prisma.checkout.update({
-      where: { id: checkout.id },
-      data: { trackingCode },
-      include: { customer: { select: { displayName: true } } },
-    });
-    return this.toMerchantOrder(updated);
-  }
-
-  async create(
-    input: CreateCheckoutInput,
-    actor: { staffUserId: string },
-  ) {
-    if (!actor?.staffUserId?.trim()) {
+  async create(input: CreateCheckoutInput, actor: { staffUserId: string }) {
+    if (actor == null || actor.staffUserId == null || actor.staffUserId === '')
       throw new UnauthorizedException('Sessão inválida.');
-    }
     const customer = await this.prisma.customer.findFirst({
       where: {
         id: input.customerId,
@@ -413,6 +373,17 @@ export class CheckoutService {
       selectedByDefault: addon.selectedByDefault,
     }));
 
+    const mpConnected = this.paymentProvider
+      ? await this.paymentProvider.isConnected(fresh.tenantId, fresh.storeId)
+      : false;
+    const mpPublicKey =
+      mpConnected && this.mercadoPago
+        ? await this.mercadoPago.getSellerPublicKey(
+            fresh.tenantId,
+            fresh.storeId,
+          )
+        : null;
+
     return {
       id: fresh.id,
       status,
@@ -430,10 +401,9 @@ export class CheckoutService {
       customerFirstName: firstName(fresh.customer.displayName),
       expiresAt: fresh.expiresAt,
       paidAt: fresh.paidAt,
-      ...(await this.publicOfferPaymentFields(fresh, status)),
-      deliveryEnabled: fresh.store.deliveryEnabled ?? true,
-      shippingCents: fresh.store.shippingCents ?? 0,
-      pickupAddressText: fresh.store.pickupAddressText ?? null,
+      paymentMode: 'transparent' as const,
+      mpPublicKey,
+      canPay: status === 'pending' && mpConnected && Boolean(mpPublicKey),
       addons,
       discountCaps,
       branding: {
@@ -443,6 +413,201 @@ export class CheckoutService {
         fontFamily: fresh.store.checkoutFontFamily ?? 'geist',
         message: fresh.store.checkoutMessage,
       },
+      deliveryEnabled: fresh.store.deliveryEnabled,
+      shippingCents: fresh.store.shippingCents,
+      pickupAddressText: fresh.store.pickupAddressText,
+    };
+  }
+
+  /**
+   * Checkout transparente: cria pagamento na conta do lojista com application_fee.
+   */
+  async createTransparentPayment(
+    storeSlug: string,
+    coupon: string,
+    input: {
+      selectedAddonIds?: string[];
+      paymentMethodId: string;
+      token?: string;
+      installments?: number;
+      issuerId?: string;
+      payerEmail: string;
+      payerIdentification?: { type: string; number: string };
+      fulfillmentMethod: 'pickup' | 'delivery';
+      shippingAddress?: unknown;
+    },
+  ) {
+    if (!this.mercadoPago) {
+      throw new BadRequestException(
+        'Pagamento indisponível. A loja precisa conectar o Mercado Pago.',
+      );
+    }
+
+    const checkout = await this.findByStoreSlugAndCoupon(storeSlug, coupon);
+    const expired =
+      checkout.expiresAt != null && checkout.expiresAt.getTime() < Date.now();
+    if (expired && checkout.status === 'pending') {
+      throw new BadRequestException('Este link de pagamento expirou.');
+    }
+    if (checkout.status === 'paid') {
+      throw new BadRequestException('Este pagamento já foi confirmado.');
+    }
+    if (checkout.status !== 'pending') {
+      throw new BadRequestException('Checkout indisponível.');
+    }
+    if (!checkout.productId) {
+      throw new BadRequestException('Checkout sem produto principal.');
+    }
+
+    const connected = await this.mercadoPago.isConnected(
+      checkout.tenantId,
+      checkout.storeId,
+    );
+    if (!connected) {
+      throw new BadRequestException(
+        'Pagamento indisponível. A loja precisa conectar o Mercado Pago.',
+      );
+    }
+
+    const selectedAddonIds = Array.isArray(input.selectedAddonIds)
+      ? input.selectedAddonIds
+      : [];
+    const addons = parseAddonsJson(checkout.addonsJson);
+    const rules = await this.loadStoreRules(checkout.tenantId, checkout.storeId);
+    const caps = getDiscountCapsFromRules(rules);
+    const listPriceCents = checkout.listPriceCents ?? checkout.amountCents;
+
+    let lines: PaidLine[];
+    let total: number;
+    try {
+      ({ lines, total } = buildPaidLines({
+        productId: checkout.productId,
+        productNameSnapshot: checkout.productNameSnapshot,
+        listPriceCents,
+        discountBps: checkout.discountBps,
+        addons,
+        selectedAddonIds,
+        caps,
+        commissionRateBps: checkout.commissionRateBps,
+      }));
+    } catch (e) {
+      if (e instanceof UnknownCheckoutAddonError) {
+        throw new BadRequestException(e.message);
+      }
+      throw e;
+    }
+
+    const method = input.fulfillmentMethod;
+    if (method !== 'pickup' && method !== 'delivery') {
+      throw new BadRequestException(
+        'Escolha retirar na loja ou receber em casa.',
+      );
+    }
+    const store = await this.prisma.store.findUniqueOrThrow({
+      where: { id: checkout.storeId },
+    });
+    if (method === 'delivery' && !store.deliveryEnabled) {
+      throw new BadRequestException(
+        'Esta loja não oferece entrega no momento.',
+      );
+    }
+    const shippingCents = resolveShippingCents(method, store.shippingCents);
+    let shippingAddressJson: string | null = null;
+    if (method === 'delivery') {
+      try {
+        shippingAddressJson = serializeShippingAddress(
+          parseShippingAddress(input.shippingAddress),
+        );
+      } catch (e) {
+        throw new BadRequestException(
+          e instanceof Error ? e.message : 'Endereço inválido.',
+        );
+      }
+    }
+    const { chargeCents, commissionCents: feeCents } = computePaymentAmounts(
+      total,
+      shippingCents,
+      checkout.commissionRateBps,
+    );
+
+    const payerEmail = input.payerEmail?.trim() || '';
+    if (!payerEmail || !payerEmail.includes('@')) {
+      throw new BadRequestException('Informe um e-mail válido para o pagamento.');
+    }
+
+    const paymentMethodId = input.paymentMethodId?.trim().toLowerCase();
+    if (!paymentMethodId) {
+      throw new BadRequestException('Método de pagamento obrigatório.');
+    }
+
+    // Cartão exige token; Pix (bank_transfer) não.
+    const isPix = paymentMethodId === 'pix';
+    if (!isPix && !input.token?.trim()) {
+      throw new BadRequestException('Token do cartão obrigatório.');
+    }
+
+    await this.prisma.checkout.update({
+      where: { id: checkout.id },
+      data: {
+        commissionCents: feeCents,
+        paidLinesJson: serializePaidLines(lines),
+        provider: 'mercadopago',
+        fulfillmentMethod: method,
+        shippingCents,
+        shippingAddressJson,
+      },
+    });
+
+    let payment;
+    try {
+      payment = await this.mercadoPago.createTransparentPayment({
+        tenantId: checkout.tenantId,
+        storeId: checkout.storeId,
+        checkoutId: checkout.id,
+        amountCents: chargeCents,
+        commissionCents: feeCents,
+        description: lines.map((l) => l.productNameSnapshot).join(' + '),
+        paymentMethodId,
+        token: input.token,
+        installments: input.installments,
+        issuerId: input.issuerId,
+        payerEmail,
+        payerIdentification: input.payerIdentification,
+        idempotencyKey: randomUUID(),
+      });
+    } catch (err) {
+      throw new BadRequestException(
+        err instanceof Error
+          ? err.message
+          : 'Não foi possível processar o pagamento.',
+      );
+    }
+
+    await this.prisma.checkout.update({
+      where: { id: checkout.id },
+      data: {
+        providerRef: String(payment.id),
+        mpPaymentId: String(payment.id),
+      },
+    });
+
+    if (payment.status === 'approved') {
+      await this.markPaid(checkout.id, checkout.tenantId, {
+        mpPaymentId: String(payment.id),
+      });
+    }
+
+    return {
+      paymentId: payment.id,
+      status: payment.status,
+      statusDetail: payment.status_detail ?? null,
+      amountCents: chargeCents,
+      pixQrCode:
+        payment.point_of_interaction?.transaction_data?.qr_code ?? null,
+      pixQrCodeBase64:
+        payment.point_of_interaction?.transaction_data?.qr_code_base64 ?? null,
+      pixTicketUrl:
+        payment.point_of_interaction?.transaction_data?.ticket_url ?? null,
     };
   }
 
@@ -548,113 +713,6 @@ export class CheckoutService {
     return { checkout_url: link.initPoint };
   }
 
-  /**
-   * Payment Brick → POST /offers/public/:slug/:coupon/payments.
-   * Commission is sent to MP as application_fee (see MercadoPagoClient.createPayment).
-   */
-  async createPublicPayment(
-    storeSlug: string,
-    coupon: string,
-    input: CreateTransparentOfferPaymentInput,
-  ) {
-    const checkout = await this.findByStoreSlugAndCoupon(storeSlug, coupon);
-    const expired =
-      checkout.expiresAt != null && checkout.expiresAt.getTime() < Date.now();
-    if (expired && checkout.status === 'pending') {
-      throw new BadRequestException('Este link de pagamento expirou.');
-    }
-    if (checkout.status === 'paid') {
-      throw new BadRequestException('Este pagamento já foi confirmado.');
-    }
-    if (checkout.status !== 'pending') {
-      throw new BadRequestException('Checkout indisponível.');
-    }
-    if (!checkout.productId) {
-      throw new BadRequestException('Checkout sem produto principal.');
-    }
-
-    if (!this.paymentProvider) {
-      throw new BadRequestException(
-        'Pagamento indisponível. A loja precisa conectar o Mercado Pago.',
-      );
-    }
-
-    const connected = await this.paymentProvider.isConnected(
-      checkout.tenantId,
-      checkout.storeId,
-    );
-    if (!connected) {
-      throw new BadRequestException(
-        'Pagamento indisponível. A loja precisa conectar o Mercado Pago.',
-      );
-    }
-
-    const method = input.paymentMethodId.trim().toLowerCase();
-    if (method !== 'pix' && !input.token) {
-      throw new BadRequestException('Token do cartão obrigatório.');
-    }
-
-    const addons = parseAddonsJson(checkout.addonsJson);
-    const rules = await this.loadStoreRules(checkout.tenantId, checkout.storeId);
-    const caps = getDiscountCapsFromRules(rules);
-    const listPriceCents = checkout.listPriceCents ?? checkout.amountCents;
-
-    let lines: PaidLine[];
-    let total: number;
-    let commissionCents: number;
-    try {
-      ({ lines, total, commissionCents } = buildPaidLines({
-        productId: checkout.productId,
-        productNameSnapshot: checkout.productNameSnapshot,
-        listPriceCents,
-        discountBps: checkout.discountBps,
-        addons,
-        selectedAddonIds: input.selectedAddonIds ?? [],
-        caps,
-        commissionRateBps: checkout.commissionRateBps,
-      }));
-    } catch (e) {
-      if (e instanceof UnknownCheckoutAddonError) {
-        throw new BadRequestException(e.message);
-      }
-      throw e;
-    }
-
-    const result = await this.paymentProvider.createTransparentPayment({
-      tenantId: checkout.tenantId,
-      storeId: checkout.storeId,
-      checkoutId: checkout.id,
-      amountCents: total,
-      commissionCents,
-      title: checkout.productNameSnapshot,
-      paymentMethodId: method,
-      payerEmail: input.payerEmail,
-      token: input.token,
-      installments: input.installments,
-      issuerId: input.issuerId,
-      payerIdentification: input.payerIdentification,
-    });
-
-    await this.prisma.checkout.update({
-      where: { id: checkout.id },
-      data: {
-        commissionCents,
-        paidLinesJson: serializePaidLines(lines),
-        provider: 'mercadopago',
-        providerRef: String(result.paymentId),
-        mpPaymentId: String(result.paymentId),
-      },
-    });
-
-    if (result.status === 'approved') {
-      await this.markPaid(checkout.id, checkout.tenantId, {
-        mpPaymentId: String(result.paymentId),
-      });
-    }
-
-    return result;
-  }
-
   async getPublicOfferStatus(storeSlug: string, coupon: string) {
     const checkout = await this.findByStoreSlugAndCoupon(storeSlug, coupon);
     const expired =
@@ -688,7 +746,7 @@ export class CheckoutService {
     };
   }
 
-  /** Marks checkout paid after Mercado Pago webhook verification. HTTP cannot call this. */
+  /** Marks checkout paid (webhook MP / simulate pay). */
   async markPaid(
     checkoutId: string,
     tenantId?: string,
@@ -767,7 +825,10 @@ export class CheckoutService {
           data: {
             status: 'paid',
             paidAt,
-            amountCents: paidTotalCents > 0 ? paidTotalCents : checkout.amountCents,
+            amountCents:
+              (paidTotalCents > 0 ? paidTotalCents : checkout.amountCents) +
+              (checkout.shippingCents ?? 0),
+            fulfillmentStatus: checkout.fulfillmentStatus ?? 'awaiting',
             ...(opts?.mpPaymentId ? { mpPaymentId: opts.mpPaymentId } : {}),
           },
         });
@@ -845,56 +906,38 @@ export class CheckoutService {
           `Falha ao notificar lojista do pagamento: ${err instanceof Error ? err.message : err}`,
         );
       });
+
+      void this.notifyMerchantOrderWhatsApp(result.checkout.id).catch((err) => {
+        this.logger.warn(
+          `Falha ao enviar WhatsApp de pedido: ${err instanceof Error ? err.message : err}`,
+        );
+      });
     }
 
     return result.checkout;
   }
 
-  private toMerchantOrder(row: {
-    id: string;
-    couponCode: string | null;
-    productNameSnapshot: string;
-    amountCents: number;
-    commissionCents: number;
-    fulfillmentMethod: string | null;
-    trackingCode: string | null;
-    mpPaymentId: string | null;
-    status: string;
-    paidLinesJson: string | null;
-    paidAt: Date | null;
-    customer: { displayName: string };
-  }) {
-    return {
-      id: row.id,
-      couponCode: row.couponCode,
-      productName: row.productNameSnapshot,
-      amountCents: row.amountCents,
-      shippingCents: 0,
-      commissionCents: row.commissionCents,
-      fulfillmentMethod: row.fulfillmentMethod ?? null,
-      fulfillmentStatus: null as string | null,
-      trackingCode: row.trackingCode ?? null,
-      mpPaymentId: row.mpPaymentId ?? null,
-      status: row.status,
-      shippingAddress: null,
-      paidLines: parsePaidLinesJson(row.paidLinesJson),
-      customerName: row.customer.displayName,
-      paidAt: row.paidAt,
-    };
-  }
-
   private async findByStoreSlugAndCoupon(storeSlug: string, coupon: string) {
     const code = coupon.trim().toUpperCase();
-    const slug = storeSlug.trim().toLowerCase();
-    const store = await this.prisma.store.findUnique({
-      where: { slug },
+    const store = await this.prisma.store.findFirst({
+      where: { slug: storeSlug.trim().toLowerCase() },
     });
-    if (!store) throw new NotFoundException('Oferta não encontrada.');
+    if (!store) {
+      // also try exact slug match (slugs may be mixed case)
+      const storeExact = await this.prisma.store.findFirst({
+        where: { slug: storeSlug.trim() },
+      });
+      if (!storeExact) throw new NotFoundException('Oferta não encontrada.');
+      const checkout = await this.prisma.checkout.findFirst({
+        where: { storeId: storeExact.id, couponCode: code },
+        include: { customer: true, store: true, product: true },
+      });
+      if (!checkout) throw new NotFoundException('Oferta não encontrada.');
+      return checkout;
+    }
 
-    const checkout = await this.prisma.checkout.findUnique({
-      where: {
-        storeId_couponCode: { storeId: store.id, couponCode: code },
-      },
+    const checkout = await this.prisma.checkout.findFirst({
+      where: { storeId: store.id, couponCode: code },
       include: { customer: true, store: true, product: true },
     });
     if (!checkout) throw new NotFoundException('Oferta não encontrada.');
@@ -971,27 +1014,6 @@ export class CheckoutService {
     );
   }
 
-  private async publicOfferPaymentFields(
-    fresh: {
-      tenantId: string;
-      storeId: string;
-      providerInitPoint: string | null;
-    },
-    status: string,
-  ) {
-    const mpPublicKey = this.paymentProvider?.getSellerPublicKey() ?? null;
-    const mpConnected = this.paymentProvider
-      ? await this.paymentProvider.isConnected(fresh.tenantId, fresh.storeId)
-      : false;
-    const paymentMode: 'transparent' | 'pro' =
-      mpConnected && mpPublicKey ? 'transparent' : 'pro';
-    const canPay =
-      status === 'pending' &&
-      mpConnected &&
-      (Boolean(mpPublicKey) || Boolean(fresh.providerInitPoint));
-    return { paymentMode, mpPublicKey, canPay };
-  }
-
   /** E-mail para o dono da loja avisando que um link foi pago. */
   private async notifyMerchantPaid(checkoutId: string) {
     const checkout = await this.prisma.checkout.findUnique({
@@ -1014,6 +1036,134 @@ export class CheckoutService {
       amountCents: checkout.amountCents,
       commissionCents: checkout.commissionCents,
     });
+  }
+
+  /** WhatsApp no número de aviso (≠ WA de vendas) após pagamento. */
+  private async notifyMerchantOrderWhatsApp(checkoutId: string) {
+    const checkout = await this.prisma.checkout.findUnique({
+      where: { id: checkoutId },
+      include: { customer: true, store: true },
+    });
+    if (!checkout?.store.orderNotifyPhoneE164) return;
+    if (checkout.orderNotifiedAt) return;
+
+    const lines = parsePaidLinesJson(checkout.paidLinesJson);
+    const items =
+      lines.length > 0
+        ? lines.map((l) => l.productNameSnapshot).join(', ')
+        : checkout.productNameSnapshot;
+    const productsCents =
+      lines.reduce((s, l) => s + l.amountCents, 0) ||
+      Math.max(0, checkout.amountCents - checkout.shippingCents);
+    const method =
+      checkout.fulfillmentMethod === 'delivery'
+        ? 'Entrega'
+        : 'Retirada na loja';
+    let addressBlock = method;
+    if (
+      checkout.fulfillmentMethod === 'delivery' &&
+      checkout.shippingAddressJson
+    ) {
+      const a = JSON.parse(checkout.shippingAddressJson) as ShippingAddress;
+      addressBlock = `Entrega: ${a.recipientName}, ${a.street}, ${a.number}${a.complement ? ' ' + a.complement : ''} — ${a.neighborhood}, ${a.city}/${a.state}, CEP ${a.cep}, tel ${a.phoneE164}`;
+    } else if (checkout.store.pickupAddressText) {
+      addressBlock = `Retirada: ${checkout.store.pickupAddressText}`;
+    }
+
+    const body = [
+      `Nova venda Voltou · ${checkout.couponCode ?? checkout.id.slice(0, 8)}`,
+      items,
+      `Produtos: R$ ${(productsCents / 100).toFixed(2)} · Frete: R$ ${(checkout.shippingCents / 100).toFixed(2)} · Total: R$ ${(checkout.amountCents / 100).toFixed(2)}`,
+      addressBlock,
+      'Abra o painel Pedidos para atualizar o status.',
+    ].join('\n');
+
+    await this.whatsapp.send({
+      tenantId: checkout.tenantId,
+      storeId: checkout.storeId,
+      to: checkout.store.orderNotifyPhoneE164,
+      body,
+    });
+
+    await this.prisma.checkout.update({
+      where: { id: checkout.id },
+      data: { orderNotifiedAt: new Date() },
+    });
+  }
+
+  async listPaidOrders(
+    tenantId: string,
+    storeId: string,
+    fulfillmentStatus?: string,
+  ) {
+    const rows = await this.prisma.checkout.findMany({
+      where: {
+        tenantId,
+        storeId,
+        status: 'paid',
+        ...(fulfillmentStatus ? { fulfillmentStatus } : {}),
+      },
+      include: { customer: true },
+      orderBy: { paidAt: 'desc' },
+      take: 100,
+    });
+    const tr = await this.prisma.$queryRawUnsafe<
+      { id: string; trackingCode: string | null }[]
+    >(
+      'SELECT id, trackingCode FROM Checkout WHERE tenantId = ? AND storeId = ? AND status = ?',
+      tenantId,
+      storeId,
+      'paid',
+    );
+    const tm = new Map(tr.map((x) => [x.id, x.trackingCode]));
+    return rows.map((c) => ({
+      id: c.id,
+      couponCode: c.couponCode,
+      productName: c.productNameSnapshot,
+      amountCents: c.amountCents,
+      shippingCents: c.shippingCents,
+      commissionCents: c.commissionCents,
+      fulfillmentMethod: c.fulfillmentMethod,
+      fulfillmentStatus: c.fulfillmentStatus,
+      trackingCode: tm.get(c.id) ?? null,
+      shippingAddress: c.shippingAddressJson
+        ? (JSON.parse(c.shippingAddressJson) as ShippingAddress)
+        : null,
+      paidLines: parsePaidLinesJson(c.paidLinesJson),
+      customerName: c.customer.displayName,
+      paidAt: c.paidAt,
+    }));
+  }
+
+  /**
+   * Owner sets/clears `trackingCode` on a paid checkout (home delivery only).
+   * Returns the checkout row like prod, but the customer relation never
+   * includes phoneEnc/phoneHash (intentional fix vs prod, which leaked them).
+   */
+  async updateFulfillment(
+    checkoutId: string,
+    tenantId: string,
+    input: { storeId?: string; trackingCode?: unknown },
+  ) {
+    const checkout = await this.prisma.checkout.findFirst({
+      where: {
+        id: checkoutId,
+        tenantId,
+        status: 'paid',
+        ...(input.storeId ? { storeId: input.storeId } : {}),
+      },
+      include: { customer: { omit: { phoneEnc: true, phoneHash: true } } },
+    });
+    if (!checkout) throw new NotFoundException('Pedido nao encontrado.');
+    if (input.trackingCode === undefined) return checkout;
+    assertTrackingAllowed(checkout.fulfillmentMethod);
+    const trackingCode = normalizeTrackingCode(input.trackingCode);
+    await this.prisma.$executeRawUnsafe(
+      'UPDATE Checkout SET trackingCode = ? WHERE id = ?',
+      trackingCode,
+      checkout.id,
+    );
+    return { ...checkout, trackingCode };
   }
 }
 

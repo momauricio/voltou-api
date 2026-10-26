@@ -1,7 +1,6 @@
 import {
   BadRequestException,
   HttpException,
-  HttpStatus,
   Injectable,
   NotFoundException,
   UnauthorizedException,
@@ -17,11 +16,13 @@ import {
 import {
   CreatePaymentLinkInput,
   CreatePaymentLinkResult,
-  CreateTransparentPaymentInput,
   PaymentProvider,
-  TransparentPaymentResult,
 } from '../checkout/payment-provider';
-import { MercadoPagoClient, type MpTokenResponse } from './mercadopago.client';
+import {
+  MercadoPagoClient,
+  type MpPaymentResponse,
+  type MpTokenResponse,
+} from './mercadopago.client';
 
 export type MpConnectionView = {
   connected: boolean;
@@ -53,16 +54,6 @@ export class MercadoPagoService implements PaymentProvider {
       where: { tenantId_storeId: { tenantId, storeId } },
     });
     return Boolean(row && row.status === 'connected');
-  }
-
-  /**
-   * Public key for Payment Brick. Integrator/marketplace MP_PUBLIC_KEY
-   * wins over a seller key when both are present.
-   */
-  getSellerPublicKey(sellerPublicKey?: string | null): string | null {
-    const integrator = process.env.MP_PUBLIC_KEY?.trim();
-    if (integrator) return integrator;
-    return sellerPublicKey?.trim() || null;
   }
 
   async getAuthorizeUrl(tenantId: string, storeId: string) {
@@ -130,6 +121,10 @@ export class MercadoPagoService implements PaymentProvider {
     }
 
     const expiresAt = new Date(Date.now() + tokens.expires_in * 1000);
+    const publicKey = await this.mp.resolvePublicKey(
+      tokens.access_token,
+      tokens.public_key,
+    );
     const data = {
       accessTokenEnc: encryptSecret(tokens.access_token),
       refreshTokenEnc: encryptSecret(tokens.refresh_token),
@@ -137,6 +132,7 @@ export class MercadoPagoService implements PaymentProvider {
       status: 'connected',
       mpUserId: tokens.user_id != null ? String(tokens.user_id) : null,
       accountLabel: store.name,
+      publicKey,
     };
 
     await this.prisma.mercadoPagoConnection.upsert({
@@ -225,6 +221,89 @@ export class MercadoPagoService implements PaymentProvider {
     }
   }
 
+  /**
+   * Public key for Payment Brick: integrator MP_PUBLIC_KEY wins; else the
+   * seller key stored on the connection; else resolved via MP API and saved.
+   */
+  async getSellerPublicKey(
+    tenantId: string,
+    storeId: string,
+  ): Promise<string | null> {
+    const envPk = (process.env.MP_PUBLIC_KEY || '').trim();
+    if (envPk) return envPk;
+
+    const row = await this.prisma.mercadoPagoConnection.findUnique({
+      where: { tenantId_storeId: { tenantId, storeId } },
+    });
+    if (!row || row.status !== 'connected') return null;
+    if (row.publicKey?.trim()) return row.publicKey.trim();
+
+    try {
+      const accessToken = await this.getValidAccessToken(tenantId, storeId);
+      const publicKey = await this.mp.resolvePublicKey(accessToken);
+      if (publicKey) {
+        await this.prisma.mercadoPagoConnection.update({
+          where: { id: row.id },
+          data: { publicKey },
+        });
+      }
+      return publicKey;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Checkout Transparente: POST /v1/payments with seller OAuth token
+   * and application_fee = Voltou commission. No collector_id.
+   */
+  async createTransparentPayment(input: {
+    tenantId: string;
+    storeId: string;
+    checkoutId: string;
+    amountCents: number;
+    commissionCents: number;
+    description: string;
+    paymentMethodId: string;
+    token?: string;
+    installments?: number;
+    issuerId?: string;
+    payerEmail: string;
+    payerIdentification?: { type: string; number: string };
+    idempotencyKey: string;
+  }): Promise<MpPaymentResponse> {
+    const accessToken = await this.getValidAccessToken(
+      input.tenantId,
+      input.storeId,
+    );
+    const apiUrl =
+      process.env.API_PUBLIC_URL ??
+      process.env.WEB_URL?.replace(':3000', ':3001') ??
+      'http://localhost:3001';
+
+    return this.mp.createPayment(
+      accessToken,
+      {
+        transactionAmount: input.amountCents / 100,
+        description: input.description,
+        paymentMethodId: input.paymentMethodId,
+        installments: input.installments,
+        token: input.token,
+        issuerId: input.issuerId,
+        payerEmail: input.payerEmail,
+        payerIdentification: input.payerIdentification,
+        externalReference: input.checkoutId,
+        applicationFee: input.commissionCents / 100,
+        notificationUrl: `${apiUrl}/mercadopago/webhook`,
+        metadata: {
+          checkout_id: input.checkoutId,
+          source: 'voltou_transparent',
+        },
+      },
+      input.idempotencyKey,
+    );
+  }
+
   async createPaymentLink(
     input: CreatePaymentLinkInput,
   ): Promise<CreatePaymentLinkResult> {
@@ -274,56 +353,6 @@ export class MercadoPagoService implements PaymentProvider {
   }
 
   /**
-   * Checkout Transparente: POST /v1/payments with seller OAuth token
-   * and application_fee = Voltou commission. No collector_id.
-   */
-  async createTransparentPayment(
-    input: CreateTransparentPaymentInput,
-  ): Promise<TransparentPaymentResult> {
-    const apiUrl =
-      process.env.API_PUBLIC_URL ??
-      process.env.WEB_URL?.replace(':3000', ':3001') ??
-      'http://localhost:3001';
-
-    try {
-      const accessToken = await this.getValidAccessToken(
-        input.tenantId,
-        input.storeId,
-      );
-      return await this.mp.createPayment(accessToken, {
-        amountCents: input.amountCents,
-        description: input.title,
-        paymentMethodId: input.paymentMethodId,
-        payerEmail: input.payerEmail,
-        externalReference: input.checkoutId,
-        notificationUrl: `${apiUrl}/mercadopago/webhook`,
-        applicationFeeCents: input.commissionCents,
-        token: input.token,
-        installments: input.installments,
-        issuerId: input.issuerId,
-        payerIdentification: input.payerIdentification,
-        idempotencyKey:
-          `${input.checkoutId}:${input.paymentMethodId.trim().toLowerCase()}:${input.amountCents}:${input.token?.trim() || 'no-token'}`.slice(
-            0,
-            255,
-          ),
-      });
-    } catch (err) {
-      if (err instanceof BadRequestException) throw err;
-      if (err instanceof UnauthorizedException) {
-        throw new BadRequestException(
-          'Pagamento indisponível. A loja precisa conectar o Mercado Pago.',
-        );
-      }
-      throw new BadRequestException(
-        err instanceof Error
-          ? err.message
-          : 'Não foi possível criar o pagamento no Mercado Pago.',
-      );
-    }
-  }
-
-  /**
    * Webhook: MP envia topic=payment&id=... ou body com data.id.
    * MP_WEBHOOK_SECRET is required — missing/blank refuses before processing.
    * Valid requests are logged; returns checkoutId when payment is approved.
@@ -364,7 +393,7 @@ export class MercadoPagoService implements PaymentProvider {
           },
         });
         throw new UnauthorizedException(
-          'Assinatura do webhook Mercado Pago inválida.',
+          'Assinatura inválida do webhook Mercado Pago.',
         );
       }
 
@@ -446,6 +475,8 @@ export class MercadoPagoService implements PaymentProvider {
         return { ignored: true, reason: 'pagamento não encontrado' };
       }
 
+      // Intentional fix vs prod (D9): prod referenced an undefined `err` here
+      // (ReferenceError -> "err is not defined"). Log the status and ignore.
       if (payment.status !== 'approved') {
         await this.prisma.webhookLog.update({
           where: { id: log.id },
@@ -493,6 +524,8 @@ export class MercadoPagoService implements PaymentProvider {
         paymentId: String(payment.id),
       };
     } catch (err) {
+      if (err instanceof HttpException && [401, 403].includes(err.getStatus()))
+        throw err;
       await this.prisma.webhookLog.update({
         where: { id: log.id },
         data: {
@@ -500,15 +533,6 @@ export class MercadoPagoService implements PaymentProvider {
           error: err instanceof Error ? err.message : String(err),
         },
       });
-      if (err instanceof HttpException) {
-        const status = err.getStatus();
-        if (
-          status === HttpStatus.UNAUTHORIZED ||
-          status === HttpStatus.FORBIDDEN
-        ) {
-          throw err;
-        }
-      }
       return {
         ignored: true,
         reason: err instanceof Error ? err.message : 'erro interno',

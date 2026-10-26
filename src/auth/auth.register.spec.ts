@@ -71,7 +71,7 @@ function makePrisma() {
       ),
     },
     store: {
-      findUnique: jest.fn().mockResolvedValue(null),
+      findFirst: jest.fn().mockResolvedValue(null),
     },
   };
 }
@@ -163,7 +163,7 @@ describe('AuthService.register (lojista)', () => {
   it('does not give two tenants named Principal the same store slug', async () => {
     const prisma = makePrisma();
     const taken = new Set<string>();
-    prisma.store.findUnique.mockImplementation(
+    prisma.store.findFirst.mockImplementation(
       async ({ where }: { where: { slug?: string } }) =>
         where.slug && taken.has(where.slug)
           ? { id: `s-${where.slug}` }
@@ -230,7 +230,7 @@ describe('AuthService.register (lojista)', () => {
 
   it('suffixes store slug when slugify(storeName) is already taken (including principal)', async () => {
     const prisma = makePrisma();
-    prisma.store.findUnique.mockImplementation(
+    prisma.store.findFirst.mockImplementation(
       async ({ where }: { where: { slug?: string } }) => {
         if (where.slug === 'principal') return { id: 'live-loja-teste' };
         return null;

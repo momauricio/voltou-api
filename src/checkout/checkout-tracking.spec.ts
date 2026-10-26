@@ -12,6 +12,11 @@ describe('normalizeTrackingCode', () => {
     expect(normalizeTrackingCode('Jadlog 9988')).toBe('Jadlog 9988');
   });
 
+  it('rejects non-string values', () => {
+    expect(() => normalizeTrackingCode(123)).toThrow('Invalid tracking code');
+    expect(() => normalizeTrackingCode({})).toThrow(BadRequestException);
+  });
+
   it('clears empty / whitespace to null', () => {
     expect(normalizeTrackingCode(null)).toBeNull();
     expect(normalizeTrackingCode('')).toBeNull();
@@ -20,7 +25,7 @@ describe('normalizeTrackingCode', () => {
 
   it(`rejects codes longer than ${TRACKING_CODE_MAX} characters`, () => {
     expect(() => normalizeTrackingCode('x'.repeat(TRACKING_CODE_MAX + 1))).toThrow(
-      BadRequestException,
+      'Tracking code exceeds 120 characters',
     );
     expect(normalizeTrackingCode('x'.repeat(TRACKING_CODE_MAX))).toBe(
       'x'.repeat(TRACKING_CODE_MAX),
@@ -37,7 +42,9 @@ describe('assertTrackingAllowed', () => {
   });
 
   it('rejects pickup / retirada', () => {
-    expect(() => assertTrackingAllowed('pickup')).toThrow(BadRequestException);
+    expect(() => assertTrackingAllowed('pickup')).toThrow(
+      'Tracking code is only allowed for delivery orders',
+    );
     expect(() => assertTrackingAllowed('retirada')).toThrow(BadRequestException);
     expect(() => assertTrackingAllowed('PICKUP')).toThrow(BadRequestException);
   });

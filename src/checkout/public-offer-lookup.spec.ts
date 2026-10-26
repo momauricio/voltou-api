@@ -34,34 +34,17 @@ function makeCheckout(store: ReturnType<typeof makeStore>, couponCode: string) {
 }
 
 function makePrisma(stores: ReturnType<typeof makeStore>[], checkouts: ReturnType<typeof makeCheckout>[]) {
-  const storeBySlug = new Map(stores.map((s) => [s.slug, s]));
   const checkoutByStoreCoupon = new Map(
     checkouts.map((c) => [`${c.storeId}:${c.couponCode}`, c]),
   );
   return {
     store: {
-      findUnique: jest.fn(async ({ where }: { where: { slug?: string } }) => {
+      findFirst: jest.fn(async ({ where }: { where: { slug?: string } }) => {
         if (!where.slug) return null;
-        return storeBySlug.get(where.slug) ?? null;
+        return stores.find((s) => s.slug === where.slug) ?? null;
       }),
-      // Simulates the bug: findFirst on a duplicated slug always returns the first store.
-      findFirst: jest.fn(async () => stores[0] ?? null),
     },
     checkout: {
-      findUnique: jest.fn(
-        async ({
-          where,
-          include,
-        }: {
-          where: { storeId_couponCode?: { storeId: string; couponCode: string } };
-          include?: unknown;
-        }) => {
-          const key = where.storeId_couponCode;
-          if (!key) return null;
-          const row = checkoutByStoreCoupon.get(`${key.storeId}:${key.couponCode}`) ?? null;
-          return row && include ? row : row;
-        },
-      ),
       findFirst: jest.fn(
         async ({
           where,
@@ -79,65 +62,77 @@ function makePrisma(stores: ReturnType<typeof makeStore>[], checkouts: ReturnTyp
   };
 }
 
-describe('public offer lookup by unique store slug', () => {
+function makeService(prisma: ReturnType<typeof makePrisma>) {
   const email = { sendVerifyEmail: jest.fn() };
+  const whatsapp = { send: jest.fn() };
+  return new CheckoutService(prisma as never, email as never, whatsapp as never);
+}
 
-  it('resolves the offer for the store matching the unique slug, not findFirst', async () => {
+describe('public offer lookup by store slug (prod: findFirst, lowercase then exact)', () => {
+  it('resolves the offer for the store matching the slug', async () => {
     const storeA = makeStore('s-a', 'Loja A', 'loja-a');
     const storeB = makeStore('s-b', 'Loja B', 'loja-b');
     const prisma = makePrisma(
       [storeA, storeB],
       [makeCheckout(storeA, 'ABC10'), makeCheckout(storeB, 'ABC10')],
     );
-    const service = new CheckoutService(prisma as never, email as never);
+    const service = makeService(prisma);
 
-    const a = await service.getPublicOfferStatus('loja-a', 'ABC10');
-    const b = await service.getPublicOfferStatus('loja-b', 'ABC10');
+    const a = await service.getPublicOfferStatus('loja-a', 'abc10');
+    const b = await service.getPublicOfferStatus(' Loja-B ', 'ABC10');
 
     expect(a.storeSlug).toBe('loja-a');
     expect(a.storeName).toBe('Loja A');
     expect(b.storeSlug).toBe('loja-b');
     expect(b.storeName).toBe('Loja B');
-    expect(prisma.store.findUnique).toHaveBeenCalled();
-    expect(prisma.store.findFirst).not.toHaveBeenCalled();
-  });
-
-  it('still resolves the existing Loja Teste slug principal', async () => {
-    const principal = makeStore('s-live', 'Loja Teste', 'principal');
-    const other = makeStore('s-other', 'Outra Loja', 'outra-loja');
-    const prisma = makePrisma(
-      [other, principal],
-      [
-        makeCheckout(other, 'TESTE10'),
-        makeCheckout(principal, 'TESTE10'),
-      ],
-    );
-    const service = new CheckoutService(prisma as never, email as never);
-
-    const result = await service.getPublicOfferStatus('principal', 'TESTE10');
-
-    expect(result.storeSlug).toBe('principal');
-    expect(result.storeName).toBe('Loja Teste');
-    expect(result.couponCode).toBe('TESTE10');
-    expect(prisma.store.findUnique).toHaveBeenCalledWith({
-      where: { slug: 'principal' },
+    expect(prisma.store.findFirst).toHaveBeenCalledWith({
+      where: { slug: 'loja-b' },
     });
-    expect(prisma.store.findFirst).not.toHaveBeenCalled();
+    expect(prisma.checkout.findFirst).toHaveBeenCalledWith({
+      where: { storeId: 's-b', couponCode: 'ABC10' },
+      include: { customer: true, store: true, product: true },
+    });
   });
 
-  it('404s when the unique slug does not exist instead of returning another store', async () => {
+  it('falls back to the exact-case slug when the lowercase one is not found', async () => {
+    const mixed = makeStore('s-m', 'Loja Mista', 'LojaMista');
+    const prisma = makePrisma([mixed], [makeCheckout(mixed, 'TESTE10')]);
+    const service = makeService(prisma);
+
+    const result = await service.getPublicOfferStatus('LojaMista', 'TESTE10');
+
+    expect(result.storeSlug).toBe('LojaMista');
+    expect(prisma.store.findFirst).toHaveBeenNthCalledWith(1, {
+      where: { slug: 'lojamista' },
+    });
+    expect(prisma.store.findFirst).toHaveBeenNthCalledWith(2, {
+      where: { slug: 'LojaMista' },
+    });
+  });
+
+  it('404s when the slug does not exist', async () => {
     const storeA = makeStore('s-a', 'Loja A', 'loja-a');
     const prisma = makePrisma([storeA], [makeCheckout(storeA, 'ABC10')]);
-    const service = new CheckoutService(prisma as never, email as never);
+    const service = makeService(prisma);
 
     await expect(
       service.getPublicOfferStatus('loja-inexistente', 'ABC10'),
     ).rejects.toBeInstanceOf(NotFoundException);
   });
+
+  it('404s when the coupon does not exist on the store', async () => {
+    const storeA = makeStore('s-a', 'Loja A', 'loja-a');
+    const prisma = makePrisma([storeA], [makeCheckout(storeA, 'ABC10')]);
+    const service = makeService(prisma);
+
+    await expect(
+      service.getPublicOfferStatus('loja-a', 'OUTRO'),
+    ).rejects.toThrow('Oferta não encontrada.');
+  });
 });
 
 describe('Store.slug uniqueness in prisma schema', () => {
-  it('declares Store.slug as globally unique', () => {
+  it('matches prod: slug unique per tenant only (no global @unique)', () => {
     const fs = require('fs') as typeof import('fs');
     const path = require('path') as typeof import('path');
     const schema = fs.readFileSync(
@@ -145,7 +140,9 @@ describe('Store.slug uniqueness in prisma schema', () => {
       'utf8',
     );
     const storeBlock = schema.match(/model Store \{[\s\S]*?\n\}/)?.[0] ?? '';
-    expect(storeBlock).toMatch(/slug\s+String\s+@unique/);
+    expect(storeBlock).toMatch(/\n\s*slug\s+String\s*\n/);
+    expect(storeBlock).not.toMatch(/slug\s+String\s+@unique/);
+    expect(storeBlock).toMatch(/@@unique\(\[tenantId, slug\]\)/);
   });
 
   it('pins the earliest principal row so later duplicate rewrites cannot steal it', () => {
