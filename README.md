@@ -33,10 +33,14 @@ API na porta **3001** (variável `PORT` opcional).
 ### Banco de dados
 
 ```bash
-npm run db:push
-# ou
-npm run db:migrate
+npm run db:migrate          # dev: prisma migrate dev
+# banco vazio (CI/ambiente novo):
+npm run db:migrate:deploy   # prisma migrate deploy (baseline cria tudo)
 ```
+
+Em produção o container **não** altera o schema no boot. Migração é passo
+manual (backup + `prisma migrate deploy`): ver
+[docs/deploy-migrations.md](docs/deploy-migrations.md).
 
 ### WhatsApp (WAHA)
 

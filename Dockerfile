@@ -31,4 +31,6 @@ RUN mkdir -p /app/data
 
 EXPOSE 3010
 
-CMD ["sh", "-c", "npx prisma db push --skip-generate && node dist/main.js"]
+# O boot NÃO altera o schema. Migração é passo manual e explícito
+# (backup + prisma migrate deploy): ver docs/deploy-migrations.md.
+CMD ["node", "dist/main.js"]
