@@ -1,8 +1,11 @@
 import { UnauthorizedException } from '@nestjs/common';
 import { createHmac } from 'crypto';
-import { assertWhatsAppWebhookHmac } from './webhook-hmac';
+import {
+  assertWhatsAppWebhookHmac,
+  whatsAppWebhookHmacSecret,
+} from './webhook-hmac';
 
-describe('WhatsApp webhook HMAC (prod behavior)', () => {
+describe('WhatsApp webhook HMAC', () => {
   const secret = 'waha-shared-hmac-key';
   const rawBody = Buffer.from('{"event":"message","session":"default"}');
   const keys = ['NODE_ENV', 'WHATSAPP_HOOK_HMAC_KEY', 'WAHA_WEBHOOK_SECRET'];
@@ -36,7 +39,7 @@ describe('WhatsApp webhook HMAC (prod behavior)', () => {
     ).not.toThrow();
   });
 
-  it('rejects when rawBody is not a Buffer (the prod controller never has one)', () => {
+  it('rejects when rawBody is not a Buffer', () => {
     process.env.WHATSAPP_HOOK_HMAC_KEY = secret;
     expect(() =>
       assertWhatsAppWebhookHmac({ headers: {}, rawBody: undefined }),
@@ -65,5 +68,36 @@ describe('WhatsApp webhook HMAC (prod behavior)', () => {
         rawBody,
       }),
     ).not.toThrow();
+  });
+
+  it('rejects a valid HMAC when the declared algorithm is not sha512', () => {
+    process.env.WHATSAPP_HOOK_HMAC_KEY = secret;
+    const expected = createHmac('sha512', secret).update(rawBody).digest('hex');
+    expect(() =>
+      assertWhatsAppWebhookHmac({
+        headers: {
+          'x-webhook-hmac': expected,
+          'x-webhook-hmac-algorithm': 'sha256',
+        },
+        rawBody,
+      }),
+    ).toThrow('Assinatura do webhook WhatsApp inválida.');
+    expect(() =>
+      assertWhatsAppWebhookHmac({
+        headers: {
+          'x-webhook-hmac': expected,
+          'x-webhook-hmac-algorithm': 'SHA512',
+        },
+        rawBody,
+      }),
+    ).not.toThrow();
+  });
+
+  it('resolves the secret with WHATSAPP_HOOK_HMAC_KEY taking precedence', () => {
+    expect(whatsAppWebhookHmacSecret()).toBe('');
+    process.env.WAHA_WEBHOOK_SECRET = ' alias ';
+    expect(whatsAppWebhookHmacSecret()).toBe('alias');
+    process.env.WHATSAPP_HOOK_HMAC_KEY = ' primary ';
+    expect(whatsAppWebhookHmacSecret()).toBe('primary');
   });
 });

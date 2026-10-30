@@ -12,6 +12,7 @@ import { WHATSAPP_PROVIDER } from './whatsapp.constants';
 import type { WhatsAppProvider } from './whatsapp-provider.interface';
 import { Inject } from '@nestjs/common';
 import { hashPhone, normalizePhoneBr } from '../common/phone.util';
+import { whatsAppWebhookHmacSecret } from './webhook-hmac';
 
 function mapUiStatus(status: string): 'Conectado' | 'Aguardando' | 'Desconectado' {
   if (status === 'WORKING') return 'Conectado';
@@ -94,14 +95,17 @@ export class WhatsAppService implements OnModuleInit {
     return `${base}/whatsapp/webhook`;
   }
 
+  /** Com segredo configurado, o WAHA assina cada POST (X-Webhook-Hmac). */
   private webhookConfig() {
     const url = this.webhookUrl();
     if (!url) return undefined;
+    const secret = whatsAppWebhookHmacSecret();
     return {
       webhooks: [
         {
           url,
           events: ['message'],
+          ...(secret ? { hmac: { key: secret } } : {}),
         },
       ],
     };
